@@ -43,6 +43,12 @@ func (b browser) launch(url string) error {
 	return cmd.Process.Release()
 }
 
+// OpenURL opens url in the user's default browser (e.g. Google sign-in,
+// where the user is already logged in).
+func OpenURL(url string) error {
+	return openDefault(url)
+}
+
 // OpenAppWindow opens url as a standalone app window, falling back to the
 // default browser when no suitable browser is found.
 func OpenAppWindow(url string) error {

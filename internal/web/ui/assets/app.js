@@ -48,12 +48,29 @@ function deviceIcon(name) {
 
 function renderChips() {
   const s = state;
+  const d = s.drive || {};
   const parts = [];
   if (s.demo) parts.push(`<span class="chip demo">Demo data</span>`);
-  if (s.drive.connected) parts.push(`<span class="chip ok">${icon("drive")}Drive připojen</span>`);
-  else parts.push(`<span class="chip bad">${icon("drive")}Drive nepřipojen</span>`);
+  if (d.connected) {
+    parts.push(`<span class="chip ok" title="${esc(d.account)}">${icon("drive")}${d.account ? esc(d.account) : "Drive připojen"}</span>`);
+  } else {
+    parts.push(`<span class="chip bad">${icon("drive")}Drive nepřipojen</span>`);
+  }
   parts.push(`<span class="chip">${icon(deviceIcon(s.device))}Toto zařízení: ${esc(s.device)}</span>`);
   $("#chips").innerHTML = parts.join("");
+
+  // Drive problems get a prominent notice with the fix right in it.
+  const n = $("#notice");
+  if (d.needsReauth) {
+    n.innerHTML = `<span>Přihlášení ke Google Drive vypršelo. Synchronizace počká, dokud ho neobnovíš.</span><button class="btn primary" data-act="connect">Znovu připojit</button>`;
+  } else if (!d.connected && !s.demo && !d.error) {
+    n.innerHTML = `<span>Připoj svůj Google Drive, kam se budou ukládat savy.</span><button class="btn primary" data-act="connect">Připojit Google Drive</button>`;
+  } else if (d.error) {
+    n.innerHTML = `<span>${esc(d.error)}</span>`;
+  } else {
+    n.innerHTML = "";
+  }
+  n.hidden = n.innerHTML === "";
 }
 
 function card(g) {

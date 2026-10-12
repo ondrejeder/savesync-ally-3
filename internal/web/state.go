@@ -13,9 +13,10 @@ type State struct {
 }
 
 type DriveStatus struct {
-	Connected bool   `json:"connected"`
-	Account   string `json:"account,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Connected   bool   `json:"connected"`
+	NeedsReauth bool   `json:"needsReauth,omitempty"`
+	Account     string `json:"account,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 // Game status values understood by the UI.

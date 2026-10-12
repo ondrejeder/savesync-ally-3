@@ -19,13 +19,16 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ondrejeder/savesync-ally-3/internal/app"
+	"github.com/ondrejeder/savesync-ally-3/internal/drive"
 	"github.com/ondrejeder/savesync-ally-3/internal/platform"
+	"github.com/ondrejeder/savesync-ally-3/internal/store"
 	"github.com/ondrejeder/savesync-ally-3/internal/web"
 )
 
 func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	demo := fs.Bool("demo", false, "show sample data instead of real games")
+	demoMode := fs.Bool("demo", false, "show sample data instead of real games")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -67,7 +70,6 @@ func cmdRun(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	app := newApp(deviceName(), *demo)
 	srv := &web.Server{
 		AppID:   platform.AppID,
 		Version: version,
@@ -75,13 +77,27 @@ func cmdRun(args []string) error {
 		Token:   token,
 		Icon:    platform.IconSVG,
 		Log:     logger,
-		State:   app.State,
 		Quit:    stop,
-		Action:  app.Action,
 	}
-	app.onChange = srv.Notify
-	if *demo {
-		go app.runDemo(ctx)
+	if *demoMode {
+		d := newDemo(deviceName())
+		d.onChange = srv.Notify
+		srv.State, srv.Action = d.State, d.Action
+		go d.run(ctx)
+	} else {
+		st, err := store.Open(configDir, dataDir, deviceName())
+		if err != nil {
+			return fmt.Errorf("open config: %w", err)
+		}
+		auth, err := drive.NewAuth(configDir)
+		if err != nil {
+			logger.Printf("google drive disabled: %v", err)
+			auth = nil
+		}
+		a := app.New(st, auth, dataDir, version, logger)
+		a.OnChange = srv.Notify
+		srv.State, srv.Action = a.State, a.Action
+		go a.Run(ctx)
 	}
 
 	httpServer := &http.Server{
@@ -96,7 +112,7 @@ func cmdRun(args []string) error {
 		}
 	}()
 
-	logger.Printf("SaveSync Ally %s running on http://127.0.0.1:%d (device %q)", version, platform.Port, app.device)
+	logger.Printf("SaveSync Ally %s running on http://127.0.0.1:%d", version, platform.Port)
 	<-ctx.Done()
 	logger.Println("stopping")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -104,27 +120,20 @@ func cmdRun(args []string) error {
 	return httpServer.Shutdown(shutdownCtx)
 }
 
-// app holds the daemon state. In phase 1 it only serves demo data.
-type app struct {
+// demo serves sample data (`run --demo`) for working on the UI.
+type demo struct {
 	mu       sync.Mutex
-	device   string
-	demo     bool
 	state    web.State
 	onChange func()
 }
 
-func newApp(device string, demo bool) *app {
-	a := &app{device: device, demo: demo}
-	if demo {
-		a.state = web.DemoState(version, device, time.Now())
-	} else {
-		a.state = web.State{Version: version, Device: device, Games: []web.Game{}}
-	}
-	a.state.Autostart = platform.AutostartEnabled()
-	return a
+func newDemo(device string) *demo {
+	d := &demo{state: web.DemoState(version, device, time.Now())}
+	d.state.Autostart = platform.AutostartEnabled()
+	return d
 }
 
-func (a *app) State() web.State {
+func (a *demo) State() web.State {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	s := a.state
@@ -132,7 +141,7 @@ func (a *app) State() web.State {
 	return s
 }
 
-func (a *app) update(fn func(*web.State)) {
+func (a *demo) update(fn func(*web.State)) {
 	a.mu.Lock()
 	fn(&a.state)
 	a.mu.Unlock()
@@ -141,17 +150,12 @@ func (a *app) update(fn func(*web.State)) {
 	}
 }
 
-func (a *app) Action(kind, gameID string) (string, error) {
-	switch kind {
-	case "sync", "sync-all", "settings", "add", "setup", "edit", "menu", "keep-local", "keep-cloud":
-		return "Tahle akce zatím není hotová (fáze 1: kostra aplikace).", nil
-	default:
-		return "", fmt.Errorf("neznámá akce %q", kind)
-	}
+func (a *demo) Action(kind, gameID string) (string, error) {
+	return "Demo režim: akce " + kind + " se neprovádí.", nil
 }
 
-// runDemo animates the syncing game so live updates can be checked in the UI.
-func (a *app) runDemo(ctx context.Context) {
+// run animates the syncing game so live updates can be checked in the UI.
+func (a *demo) run(ctx context.Context) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
