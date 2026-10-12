@@ -1,0 +1,26 @@
+# Build output
+dist/
+build/
+*.exe
+*.syso
+
+# Secrets and local config - never commit
+.env
+.env.*
+!.env.example
+*.rar
+credentials*.json
+client_secret*.json
+google_token*.json
+
+# Go caches (when pointed inside the repo)
+.gocache/
+.gomodcache/
+.gopath/
+
+# Logs / OS / editors
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
