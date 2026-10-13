@@ -19,7 +19,7 @@ var uiFiles embed.FS
 
 const cookieName = "ssa_session"
 
-// Server is the HTTP side of the daemon. State and Quit are provided by the app.
+// Server is the HTTP side of the daemon.
 type Server struct {
 	AppID   string
 	Version string
@@ -27,10 +27,8 @@ type Server struct {
 	Token   string
 	Icon    string
 	Log     *log.Logger
-	State   func() State
+	Backend Backend
 	Quit    func()
-	// Action handles UI buttons; returns a user-facing message.
-	Action func(kind, gameID string) (string, error)
 
 	mu   sync.Mutex
 	subs map[chan struct{}]struct{}
@@ -65,6 +63,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/events", s.auth(http.HandlerFunc(s.events)))
 	mux.Handle("POST /api/action", s.auth(http.HandlerFunc(s.action)))
 	mux.Handle("POST /api/quit", s.auth(http.HandlerFunc(s.quit)))
+	s.routes(mux)
 	return s.checkHost(mux)
 }
 
@@ -146,7 +145,7 @@ func (s *Server) icon(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) state(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.State())
+	writeJSON(w, http.StatusOK, s.Backend.State())
 }
 
 // events streams the full state whenever it changes (Server-Sent Events).
@@ -173,7 +172,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	send := func() bool {
-		data, err := json.Marshal(s.State())
+		data, err := json.Marshal(s.Backend.State())
 		if err != nil {
 			return false
 		}
@@ -214,7 +213,7 @@ func (s *Server) action(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Neplatný požadavek."})
 		return
 	}
-	msg, err := s.Action(req.Kind, req.GameID)
+	msg, err := s.Backend.Action(req.Kind, req.GameID)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

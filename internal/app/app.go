@@ -133,9 +133,6 @@ func (a *App) refresh(ctx context.Context) {
 				return err
 			}
 			rootID = id
-			a.mu.Lock()
-			a.rootID = id
-			a.mu.Unlock()
 		}
 		if account == "" {
 			if email, err := a.cloud.Account(ctx); err == nil {
@@ -148,8 +145,10 @@ func (a *App) refresh(ctx context.Context) {
 		if err != nil {
 			return err
 		}
+		// rootID and the game list are published together, so a loaded
+		// root always comes with a complete list (see removedFromCloud).
 		a.mu.Lock()
-		a.cloudGames = games
+		a.rootID, a.cloudGames = rootID, games
 		a.mu.Unlock()
 		return nil
 	}()
@@ -191,6 +190,13 @@ func (a *App) syncGame(ctx context.Context, j job) {
 		return
 	}
 	if connected, _ := a.auth.Status(); !connected {
+		return
+	}
+	if a.removedFromCloud(game.ID) {
+		a.setStatus(game.ID, func(s *gameStatus) {
+			s.status, s.progress = web.StatusError, nil
+			s.message = "Hra byla smazána z cloudu (možná na jiném zařízení). Lokální soubory jsou v pořádku."
+		})
 		return
 	}
 	a.setStatus(game.ID, func(s *gameStatus) {
@@ -247,6 +253,22 @@ func (a *App) syncGame(ctx context.Context, j job) {
 			s.files, s.bytes = res.Files, res.Bytes
 		})
 	}
+}
+
+// removedFromCloud reports whether the game folder is gone from Drive. It
+// only answers once the cloud list has been loaded.
+func (a *App) removedFromCloud(id string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.rootID == "" || a.driveErr != "" {
+		return false
+	}
+	for _, cg := range a.cloudGames {
+		if cg.ID == id {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *App) fail(id string, err error) {
@@ -317,7 +339,7 @@ func (a *App) State() web.State {
 	local := map[string]bool{}
 	for _, g := range cfg.Games {
 		local[g.ID] = true
-		view := web.Game{ID: g.ID, Name: g.Name, Status: web.StatusPending}
+		view := web.Game{ID: g.ID, Name: g.Name, Root: g.Root, Include: g.Include, Status: web.StatusPending}
 		if s := a.games[g.ID]; s != nil {
 			view.Status, view.Message, view.Files, view.Bytes = s.status, s.message, s.files, s.bytes
 			view.Progress, view.Conflict = s.progress, s.conflict
@@ -381,8 +403,15 @@ func (a *App) Action(kind, gameID string) (string, error) {
 		}
 		a.enqueue(job{gameID: gameID, keep: side})
 		return "Řeším konflikt…", nil
-	case "add", "setup", "edit", "menu", "settings":
-		return "Tahle akce přijde ve fázi 3 (přidávání her a nastavení).", nil
+	case "open-folder":
+		game, ok := a.store.Game(gameID)
+		if !ok {
+			return "", fmt.Errorf("hra nebyla nalezena")
+		}
+		if err := platform.OpenFolder(game.Root); err != nil {
+			return "", err
+		}
+		return "Otevírám složku…", nil
 	default:
 		return "", fmt.Errorf("neznámá akce %q", kind)
 	}

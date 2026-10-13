@@ -139,3 +139,29 @@ func createShortcut(link, target, args string) error {
 	}
 	return nil
 }
+
+// Places are quick links in the folder picker.
+func Places() []Place {
+	home := os.Getenv("USERPROFILE")
+	places := []Place{
+		{"Domů", home, "home"},
+		{"Dokumenty", filepath.Join(home, "Documents"), "doc"},
+		{"Uložené hry", filepath.Join(home, "Saved Games"), "gamepad"},
+		{"AppData Roaming", os.Getenv("APPDATA"), "folder"},
+		{"AppData Local", os.Getenv("LOCALAPPDATA"), "folder"},
+		{"AppData LocalLow", filepath.Join(home, "AppData", "LocalLow"), "folder"},
+		{"Steam userdata", filepath.Join(os.Getenv("ProgramFiles(x86)"), "Steam", "userdata"), "steam"},
+	}
+	for c := 'C'; c <= 'Z'; c++ {
+		drive := string(c) + `:\`
+		if _, err := os.Stat(drive); err == nil {
+			places = append(places, Place{"Disk " + string(c) + ":", drive, "disk"})
+		}
+	}
+	return existing(places)
+}
+
+func openFolder(path string) error {
+	cmd := exec.Command("explorer.exe", path)
+	return cmd.Start()
+}

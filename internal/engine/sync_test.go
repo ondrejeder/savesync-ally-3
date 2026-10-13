@@ -231,3 +231,39 @@ func zipContent(t *testing.T, zipPath, name string) string {
 	}
 	return "<not in zip>"
 }
+
+func TestRestoreBackup(t *testing.T) {
+	cloud := newFakeCloud()
+	pc, ally := newDevice(t, "PC", cloud), newDevice(t, "Ally", cloud)
+	pc.write("save.sav", "good")
+	pc.sync("")
+	ally.sync("")
+	ally.write("save.sav", "broken")
+	ally.sync("")
+	r := pc.sync("") // pc downloads "broken", backing up "good"
+	if r.Backup == "" || pc.read("save.sav") != "broken" {
+		t.Fatalf("setup: %+v", r)
+	}
+
+	backups, err := ListBackups(pc.s.BackupDir, "g")
+	if err != nil || len(backups) != 1 || backups[0].Files != 1 {
+		t.Fatalf("backups = %+v, %v", backups, err)
+	}
+	if err := pc.s.RestoreBackup(GameRef{ID: "g", Root: pc.root}, backups[0].Name); err != nil {
+		t.Fatal(err)
+	}
+	if pc.read("save.sav") != "good" {
+		t.Fatalf("restored content = %q", pc.read("save.sav"))
+	}
+	// The restore itself made a safety backup of "broken".
+	if backups, _ := ListBackups(pc.s.BackupDir, "g"); len(backups) != 2 {
+		t.Fatalf("want safety backup, got %+v", backups)
+	}
+	// Restored file uploads on the next sync.
+	if r := pc.sync(""); r.Uploaded != 1 {
+		t.Fatalf("after restore = %+v", r)
+	}
+	if err := pc.s.RestoreBackup(GameRef{ID: "g", Root: pc.root}, "../x.zip"); err == nil {
+		t.Fatal("expected invalid name error")
+	}
+}

@@ -82,7 +82,7 @@ func cmdRun(args []string) error {
 	if *demoMode {
 		d := newDemo(deviceName())
 		d.onChange = srv.Notify
-		srv.State, srv.Action = d.State, d.Action
+		srv.Backend = d
 		go d.run(ctx)
 	} else {
 		st, err := store.Open(configDir, dataDir, deviceName())
@@ -96,7 +96,7 @@ func cmdRun(args []string) error {
 		}
 		a := app.New(st, auth, dataDir, version, logger)
 		a.OnChange = srv.Notify
-		srv.State, srv.Action = a.State, a.Action
+		srv.Backend = a
 		go a.Run(ctx)
 	}
 
@@ -122,6 +122,7 @@ func cmdRun(args []string) error {
 
 // demo serves sample data (`run --demo`) for working on the UI.
 type demo struct {
+	web.Unimplemented
 	mu       sync.Mutex
 	state    web.State
 	onChange func()

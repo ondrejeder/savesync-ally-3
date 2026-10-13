@@ -241,8 +241,13 @@ func (s *Syncer) backup(game GameRef, rels []string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	name := filepath.Join(dir, time.Now().Format("2006-01-02_15-04-05")+".zip")
-	out, err := os.Create(name)
+	stamp := time.Now().Format(backupStamp)
+	name := filepath.Join(dir, stamp+".zip")
+	out, err := os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	for i := 2; errors.Is(err, os.ErrExist) && i < 100; i++ {
+		name = filepath.Join(dir, fmt.Sprintf("%s-%d.zip", stamp, i))
+		out, err = os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -306,7 +311,7 @@ func (s *Syncer) pruneBackups(dir string) {
 			zips = append(zips, e.Name())
 		}
 	}
-	sort.Strings(zips) // timestamp names sort chronologically
+	sort.Slice(zips, func(i, j int) bool { return backupKey(zips[i]) < backupKey(zips[j]) })
 	for len(zips) > keep {
 		_ = os.Remove(filepath.Join(dir, zips[0]))
 		zips = zips[1:]
@@ -320,4 +325,122 @@ func safeRel(rel string) bool {
 	}
 	clean := path.Clean(rel)
 	return clean == rel && clean != "." && clean != ".." && !strings.HasPrefix(clean, "../")
+}
+
+const backupStamp = "2006-01-02_15-04-05"
+
+// backupKey orders backups chronologically, including "<stamp>-N.zip"
+// names created within the same second.
+func backupKey(name string) string {
+	base := strings.TrimSuffix(name, ".zip")
+	n := 1
+	if len(base) > len(backupStamp)+1 {
+		fmt.Sscanf(base[len(backupStamp)+1:], "%d", &n)
+		base = base[:len(backupStamp)]
+	}
+	return fmt.Sprintf("%s#%03d", base, n)
+}
+
+// BackupInfo describes one local backup archive.
+type BackupInfo struct {
+	Name    string
+	Created time.Time
+	Files   int
+	Bytes   int64
+}
+
+// ListBackups returns a game's backups, newest first.
+func ListBackups(backupDir, gameID string) ([]BackupInfo, error) {
+	dir := filepath.Join(backupDir, gameID)
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []BackupInfo
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".zip") {
+			continue
+		}
+		info := BackupInfo{Name: e.Name()}
+		if len(e.Name()) < len(backupStamp) {
+			continue
+		}
+		if t, err := time.ParseInLocation(backupStamp, e.Name()[:len(backupStamp)], time.Local); err == nil {
+			info.Created = t
+		}
+		if zr, err := zip.OpenReader(filepath.Join(dir, e.Name())); err == nil {
+			for _, f := range zr.File {
+				info.Files++
+				info.Bytes += int64(f.UncompressedSize64)
+			}
+			zr.Close()
+		}
+		out = append(out, info)
+	}
+	sort.Slice(out, func(i, j int) bool { return backupKey(out[i].Name) > backupKey(out[j].Name) })
+	return out, nil
+}
+
+// RestoreBackup extracts a backup into the game folder. Files it would
+// overwrite are backed up first, so a restore can itself be undone.
+func (s *Syncer) RestoreBackup(game GameRef, name string) error {
+	if name != filepath.Base(name) || !strings.HasSuffix(name, ".zip") {
+		return errors.New("neplatný název zálohy")
+	}
+	zr, err := zip.OpenReader(filepath.Join(s.BackupDir, game.ID, name))
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+
+	var existing []string
+	for _, f := range zr.File {
+		if !safeRel(f.Name) {
+			return fmt.Errorf("záloha obsahuje neplatnou cestu %q", f.Name)
+		}
+		if _, err := os.Stat(filepath.Join(game.Root, filepath.FromSlash(f.Name))); err == nil {
+			existing = append(existing, f.Name)
+		}
+	}
+	if len(existing) > 0 {
+		if _, err := s.backup(game, existing); err != nil {
+			return err
+		}
+	}
+	for _, f := range zr.File {
+		if err := extract(f, filepath.Join(game.Root, filepath.FromSlash(f.Name))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func extract(f *zip.File, dst string) error {
+	rc, err := f.Open()
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	tmp := dst + TempSuffix
+	out, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, rc); err != nil {
+		out.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	_ = os.Chtimes(tmp, f.Modified, f.Modified)
+	return os.Rename(tmp, dst)
 }

@@ -202,3 +202,28 @@ func writeFile(path, content string, mode os.FileMode) error {
 	}
 	return os.WriteFile(path, []byte(content), mode)
 }
+
+// Places are quick links in the folder picker. Steam's compatdata folders
+// hold the Proton prefixes where Windows games keep their saves.
+func Places() []Place {
+	home, _ := os.UserHomeDir()
+	places := []Place{
+		{"Domů", home, "home"},
+		{"Dokumenty", filepath.Join(home, "Documents"), "doc"},
+		{".local/share", filepath.Join(home, ".local", "share"), "folder"},
+		{".config", filepath.Join(home, ".config"), "folder"},
+		{"Proton prefixy", filepath.Join(home, ".local", "share", "Steam", "steamapps", "compatdata"), "steam"},
+		{"Proton prefixy", filepath.Join(home, ".steam", "steam", "steamapps", "compatdata"), "steam"},
+		{"Proton prefixy (Flatpak)", filepath.Join(home, ".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam", "steamapps", "compatdata"), "steam"},
+	}
+	if cards, err := filepath.Glob("/run/media/*/*/steamapps/compatdata"); err == nil {
+		for _, c := range cards {
+			places = append(places, Place{"Proton prefixy (SD karta)", c, "steam"})
+		}
+	}
+	return existing(places)
+}
+
+func openFolder(path string) error {
+	return openDefault(path)
+}

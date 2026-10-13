@@ -8,15 +8,21 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
-const (
-	// Port is the loopback port of the daemon's UI/API server.
-	Port = 45455
-	// AppID identifies the daemon in /api/ping responses.
-	AppID = "savesync-ally-3"
-)
+// AppID identifies the daemon in /api/ping responses.
+const AppID = "savesync-ally-3"
+
+// Port is the loopback port of the daemon's UI/API server. SAVESYNC_PORT
+// overrides it, which allows running a second instance for testing.
+var Port = func() int {
+	if p, err := strconv.Atoi(os.Getenv("SAVESYNC_PORT")); err == nil && p > 0 && p < 65536 {
+		return p
+	}
+	return 45455
+}()
 
 // ConfigDir holds settings, OAuth token and the UI session token.
 func ConfigDir() (string, error) {
@@ -123,4 +129,37 @@ func windowsDir(env string) (string, error) {
 		return "", errors.New(env + " is not set")
 	}
 	return filepath.Join(base, "SaveSyncAlly3"), nil
+}
+
+// Place is a quick link in the folder picker.
+type Place struct {
+	Label string
+	Path  string
+	Icon  string
+}
+
+// existing drops places that do not exist and duplicates (e.g. symlinked Steam dirs).
+func existing(places []Place) []Place {
+	var out []Place
+	seen := map[string]bool{}
+	for _, p := range places {
+		if p.Path == "" {
+			continue
+		}
+		real := p.Path
+		if r, err := filepath.EvalSymlinks(p.Path); err == nil {
+			real = r
+		}
+		if st, err := os.Stat(real); err != nil || !st.IsDir() || seen[real] {
+			continue
+		}
+		seen[real] = true
+		out = append(out, p)
+	}
+	return out
+}
+
+// OpenFolder shows a folder in the system file manager.
+func OpenFolder(path string) error {
+	return openFolder(path)
 }

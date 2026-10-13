@@ -33,6 +33,8 @@ const (
 type Game struct {
 	ID       string    `json:"id"`
 	Name     string    `json:"name"`
+	Root     string    `json:"root,omitempty"`
+	Include  []string  `json:"include,omitempty"`
 	Status   string    `json:"status"`
 	Message  string    `json:"message,omitempty"`
 	LastSync string    `json:"lastSync,omitempty"`
