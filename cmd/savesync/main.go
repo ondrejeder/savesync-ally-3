@@ -4,6 +4,7 @@
 //	savesync run       run the daemon (used by autostart)
 //	savesync install   install for the current user and enable autostart
 //	savesync uninstall remove autostart and shortcuts
+//	savesync publish   upload a release to Drive (development)
 //	savesync version   print the version
 package main
 
@@ -35,6 +36,8 @@ func main() {
 		err = cmdInstall()
 	case "uninstall":
 		err = cmdUninstall()
+	case "publish":
+		err = cmdPublish(args)
 	case "version", "--version", "-v":
 		fmt.Println(version)
 	case "help", "--help", "-h":
@@ -57,6 +60,7 @@ Použití:
   savesync run [--demo] spustí daemon (sync + UI server)
   savesync install     nainstaluje aplikaci pro aktuálního uživatele
   savesync uninstall   odebere autostart a zástupce (data zůstanou)
+  savesync publish --notes "…" <dist>  nahraje release na Drive (vývoj)
   savesync version     vypíše verzi
 `)
 }

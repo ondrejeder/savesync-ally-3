@@ -15,6 +15,7 @@ import (
 	"github.com/ondrejeder/savesync-ally-3/internal/engine"
 	"github.com/ondrejeder/savesync-ally-3/internal/platform"
 	"github.com/ondrejeder/savesync-ally-3/internal/store"
+	"github.com/ondrejeder/savesync-ally-3/internal/update"
 	"github.com/ondrejeder/savesync-ally-3/internal/watch"
 	"github.com/ondrejeder/savesync-ally-3/internal/web"
 )
@@ -39,6 +40,8 @@ type App struct {
 	// ScanInterval: full re-check of every game as a safety net next to the
 	// watcher and the Drive change log.
 	ScanInterval time.Duration
+	// Restart is called after an update replaced the binary.
+	Restart func()
 
 	store   *store.Store
 	auth    *drive.Auth // nil when no OAuth client is configured
@@ -58,6 +61,11 @@ type App struct {
 	queued       map[string]bool
 	versionDirs  map[string]string // gameID -> versions folder ID
 	notified     map[string]time.Time
+
+	update        *update.Manifest // newer release, if any
+	updateChecked time.Time
+	updating      bool
+	updateErr     string
 }
 
 type job struct {
@@ -158,6 +166,7 @@ func (a *App) State() web.State {
 		Device:    cfg.Device,
 		Autostart: platform.AutostartEnabled(),
 		Versions:  a.store.Versions(),
+		Update:    a.updateState(),
 		Games:     []web.Game{},
 	}
 
@@ -247,6 +256,27 @@ func (a *App) Action(kind, gameID string) (string, error) {
 		}
 		a.enqueue(job{gameID: gameID, keep: side})
 		return "Řeším konflikt…", nil
+	case "update-check":
+		go func() {
+			if err := a.checkUpdate(context.Background(), true); err != nil {
+				a.mu.Lock()
+				a.updateErr = "Kontrola aktualizací selhala: " + err.Error()
+				a.mu.Unlock()
+				a.notifyUI()
+			}
+		}()
+		return "Kontroluji aktualizace…", nil
+	case "update-install":
+		a.mu.Lock()
+		if a.update == nil || a.updating {
+			a.mu.Unlock()
+			return "", fmt.Errorf("žádná aktualizace k instalaci")
+		}
+		a.updating, a.updateErr = true, ""
+		a.mu.Unlock()
+		a.notifyUI()
+		go a.installUpdate()
+		return "Instaluji aktualizaci, aplikace se za chvíli restartuje…", nil
 	case "open-folder":
 		game, ok := a.store.Game(gameID)
 		if !ok {

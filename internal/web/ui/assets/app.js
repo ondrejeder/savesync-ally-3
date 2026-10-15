@@ -62,7 +62,14 @@ function renderChips() {
 
   // Drive problems get a prominent notice with the fix right in it.
   const n = $("#notice");
-  if (d.needsReauth) {
+  const u = s.update;
+  if (u && u.installing) {
+    n.innerHTML = `<span>Instaluji verzi ${esc(u.version)}… Aplikace se za chvíli restartuje.</span>`;
+  } else if (u && u.version) {
+    n.innerHTML = `<span><strong>Je dostupná verze ${esc(u.version)}</strong>${u.notes ? ` · ${esc(u.notes)}` : ""}${u.error ? `<br><span class="err">${esc(u.error)}</span>` : ""}</span><button class="btn primary" data-act="update-install">Nainstalovat</button>`;
+  } else if (u && u.error) {
+    n.innerHTML = `<span class="err">${esc(u.error)}</span>`;
+  } else if (d.needsReauth) {
     n.innerHTML = `<span>Přihlášení ke Google Drive vypršelo. Synchronizace počká, dokud ho neobnovíš.</span><button class="btn primary" data-act="connect">Znovu připojit</button>`;
   } else if (!d.connected && !s.demo && !d.error) {
     n.innerHTML = `<span>Připoj svůj Google Drive, kam se budou ukládat savy.</span><button class="btn primary" data-act="connect">Připojit Google Drive</button>`;
@@ -501,7 +508,9 @@ function showSettings() {
         </div></div>
       <div class="field"><span>Spouštění</span>
         <div class="muted">${s.autostart ? "Spouští se automaticky po přihlášení do systému." : "Automatické spouštění není nastavené (spusť <code>savesync install</code>)."}</div></div>
-      <div class="field"><span>Verze</span><div class="muted">SaveSync Ally ${esc(s.version)}</div></div>
+      <div class="field"><span>Verze</span>
+        <div class="row-item"><div class="muted">SaveSync Ally ${esc(s.version)}${s.update?.version ? ` · dostupná ${esc(s.update.version)}` : ""}</div>
+        <button class="btn" data-drive="update-check">Zkontrolovat aktualizace</button></div></div>
       <p class="form-error" hidden></p>`,
     footer: `<button class="btn" data-close>Zavřít</button><button class="btn primary" data-submit>Uložit</button>`,
   });
@@ -518,6 +527,10 @@ function showSettings() {
   m.addEventListener("click", async (e) => {
     const b = e.target.closest("[data-drive]");
     if (!b) return;
+    if (b.dataset.drive === "update-check") {
+      action("update-check");
+      return;
+    }
     if (b.dataset.drive === "disconnect") {
       const ok = await confirmModal({ title: "Odpojit Google Drive?", text: "Synchronizace se zastaví, dokud Drive znovu nepřipojíš. Savy v cloudu ani na disku se nesmažou.", confirm: "Odpojit" });
       if (!ok) return;
@@ -594,7 +607,13 @@ document.addEventListener("keydown", (e) => {
 function connect() {
   const es = new EventSource("/api/events");
   es.addEventListener("state", (e) => {
-    state = JSON.parse(e.data);
+    const next = JSON.parse(e.data);
+    // After an update the daemon restarts with new UI files: reload them.
+    if (state && next.version !== state.version) {
+      location.reload();
+      return;
+    }
+    state = next;
     $("#banner").hidden = true;
     render();
   });

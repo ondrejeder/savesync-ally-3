@@ -23,12 +23,14 @@ import (
 	"github.com/ondrejeder/savesync-ally-3/internal/drive"
 	"github.com/ondrejeder/savesync-ally-3/internal/platform"
 	"github.com/ondrejeder/savesync-ally-3/internal/store"
+	"github.com/ondrejeder/savesync-ally-3/internal/update"
 	"github.com/ondrejeder/savesync-ally-3/internal/web"
 )
 
 func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	demoMode := fs.Bool("demo", false, "show sample data instead of real games")
+	replace := fs.Bool("replace", false, "wait for a running (older) daemon to exit; used after an update")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -59,6 +61,11 @@ func cmdRun(args []string) error {
 	}
 
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", platform.Port))
+	// After an update the old daemon is still shutting down; wait for the port.
+	for i := 0; err != nil && *replace && i < 100; i++ {
+		time.Sleep(200 * time.Millisecond)
+		ln, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", platform.Port))
+	}
 	if err != nil {
 		if _, ok := ping(); ok {
 			logger.Println("already running")
@@ -96,6 +103,7 @@ func cmdRun(args []string) error {
 		}
 		a := app.New(st, auth, dataDir, version, logger)
 		a.OnChange = srv.Notify
+		a.Restart = func() { restartAfterUpdate(logger, stop) }
 		srv.Backend = a
 		go a.Run(ctx)
 	}
@@ -113,6 +121,9 @@ func cmdRun(args []string) error {
 	}()
 
 	logger.Printf("SaveSync Ally %s running on http://127.0.0.1:%d", version, platform.Port)
+	if exe, err := platform.CurrentExe(); err == nil {
+		update.CleanupOld(exe) // this version started fine; the rollback copy is no longer needed
+	}
 	<-ctx.Done()
 	logger.Println("stopping")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -233,4 +244,19 @@ func openLog(dataDir string) (*log.Logger, func(), error) {
 	// File first: on Windows GUI builds stdout may be invalid and MultiWriter stops at the first error.
 	logger := log.New(io.MultiWriter(f, os.Stdout), "", log.LstdFlags)
 	return logger, func() { f.Close() }, nil
+}
+
+// restartAfterUpdate starts the freshly installed binary and stops this one.
+// Under systemd the service manager restarts the daemon by itself.
+func restartAfterUpdate(logger *log.Logger, stop func()) {
+	if os.Getenv("INVOCATION_ID") == "" { // not started by systemd
+		exe, err := platform.CurrentExe()
+		if err == nil {
+			err = platform.StartDetached(exe, "run", "--replace")
+		}
+		if err != nil {
+			logger.Printf("restart after update: %v", err)
+		}
+	}
+	stop()
 }

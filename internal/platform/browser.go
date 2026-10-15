@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 )
 
 // browser is a way to launch a browser binary, optionally through flatpak.
@@ -62,4 +63,15 @@ func OpenAppWindow(url string) error {
 		}
 	}
 	return openDefault(url)
+}
+
+// StartDetached starts a background process that outlives this one.
+func StartDetached(exe string, args ...string) error {
+	cmd := exec.Command(exe, args...)
+	cmd.Dir = filepath.Dir(exe)
+	detach(cmd)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
 }

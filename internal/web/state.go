@@ -11,8 +11,17 @@ type State struct {
 	Autostart bool        `json:"autostart"`
 	Versions  int         `json:"versions"`
 	// CloudChecked is when the Drive change log was last checked.
-	CloudChecked string `json:"cloudChecked,omitempty"`
-	Games        []Game `json:"games"`
+	CloudChecked string        `json:"cloudChecked,omitempty"`
+	Update       *UpdateStatus `json:"update,omitempty"`
+	Games        []Game        `json:"games"`
+}
+
+// UpdateStatus describes an available release (or a failed update).
+type UpdateStatus struct {
+	Version    string `json:"version,omitempty"`
+	Notes      string `json:"notes,omitempty"`
+	Installing bool   `json:"installing,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 type DriveStatus struct {

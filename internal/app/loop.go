@@ -136,6 +136,9 @@ func (a *App) fullCheck(ctx context.Context) error {
 		_ = a.store.SaveChangesToken(token)
 	}
 	a.markChecked()
+	if err := a.checkUpdate(ctx, false); err != nil {
+		a.Log.Printf("update check: %v", err)
+	}
 	return nil
 }
 

@@ -167,3 +167,48 @@ func (c *Client) Delete(ctx context.Context, id string) error {
 	resp.Body.Close()
 	return nil
 }
+
+// ---------- app releases ----------
+
+// AppFolder finds or creates the ".app" folder holding release binaries.
+func (c *Client) AppFolder(ctx context.Context, rootID string, create bool) (string, error) {
+	files, err := c.list(ctx, fmt.Sprintf(
+		"'%s' in parents and appProperties has { key='savesync' and value='app' } and trashed=false", escape(rootID)))
+	if err != nil {
+		return "", err
+	}
+	if len(files) > 0 {
+		return files[0].ID, nil
+	}
+	if !create {
+		return "", nil
+	}
+	f, err := c.createFolder(ctx, ".app", rootID, map[string]string{"savesync": "app"})
+	return f.ID, err
+}
+
+// FindFile returns the ID of a file by name in a folder ("" if missing).
+func (c *Client) FindFile(ctx context.Context, folderID, name string) (string, error) {
+	files, err := c.list(ctx, fmt.Sprintf("'%s' in parents and name='%s' and trashed=false", escape(folderID), escape(name)))
+	if err != nil || len(files) == 0 {
+		return "", err
+	}
+	return files[0].ID, nil
+}
+
+// PutFile creates or replaces a named file in a folder and returns its ID.
+func (c *Client) PutFile(ctx context.Context, folderID, name string, body io.Reader, size int64) (string, error) {
+	existing, err := c.FindFile(ctx, folderID, name)
+	if err != nil {
+		return "", err
+	}
+	meta := map[string]any{"name": name}
+	method, target := http.MethodPost, uploadBase+"/files"
+	if existing != "" {
+		method, target = http.MethodPatch, uploadBase+"/files/"+url.PathEscape(existing)
+	} else {
+		meta["parents"] = []string{folderID}
+	}
+	f, err := c.uploadResumable(ctx, method, target+"?uploadType=resumable&fields=id,md5Checksum,size", meta, body, size)
+	return f.ID, err
+}

@@ -115,10 +115,16 @@ pojistka, stažení z jiného zařízení, smazání hry z cloudu, vypršelé p�
 
 ## Self-update
 
-1. `build.ps1` sestaví obě binárky, `savesync publish` je nahraje do `.app/` s `latest.json` (verze, sha256).
-2. Klienti kontrolují při startu a každých pár hodin; UI nabídne „Nainstalovat“.
-3. Stažení → ověření sha256 → náhrada vlastní binárky → restart
-   (Linux: systemd `Restart=always`; Windows: přejmenování na `.old` a spuštění nové).
+1. `scriptselease.ps1 -Version X.Y.Z -Notes "…"` (čistý repozitář): vytvoří tag `vX.Y.Z`, sestaví
+   binárky a `savesync publish` je nahraje do `SaveSync Ally 3/.app/` (stejný název = stejné ID souboru).
+   `latest.json` jde až nakonec: verze, poznámky a pro každou platformu (`windows-amd64`,
+   `linux-amd64`, později `linux-arm64`) ID souboru, velikost a SHA-256.
+2. Klienti čtou manifest při plné kontrole, nejvýš 1× za 6 h, nebo ručně v Nastavení; novější
+   verze → lišta „Nainstalovat“ a jednorázová notifikace.
+3. Instalace (jen u nainstalované binárky): stažení → kontrola velikosti a SHA-256 → stará
+   binárka přejmenována na `.old`, nová na její místo → restart. Linux pod systemd: daemon skončí
+   a systemd ho spustí znovu; jinak se spustí `run --replace`, který počká na uvolnění portu.
+   Okno aplikace se po změně verze samo znovu načte. `.old` se smaže po úspěšném startu.
 
 ## UI
 
@@ -135,7 +141,7 @@ pojistka, stažení z jiného zařízení, smazání hry z cloudu, vypršelé p�
 2. ✅ Drive klient + OAuth, plánovač s testy.
 3. ✅ Hlavní UI: přidání hry, sync, nastavení na druhém zařízení, konflikty, lokální zálohy.
 4. ✅ Watcher, Changes API, cache hashů, pojistka po stažení, notifikace, verze v cloudu.
-5. Self-update a publish.
+5. ✅ Self-update a publish.
 6. Migrace z v2 (import seznamu her a cest), test na Ally.
 
 ## Později: Linux ARM64 a Android (AYN Odin 3)

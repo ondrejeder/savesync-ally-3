@@ -261,3 +261,5 @@ select {
   font: inherit; color: var(--text); background: var(--surface-2);
   border: 1px solid var(--border-strong); border-radius: var(--radius); min-height: 44px; padding: 0 10px; width: 120px;
 }
+.err { color: var(--danger-text); }
+.notice strong { font-weight: 600; }
