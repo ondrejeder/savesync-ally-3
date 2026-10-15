@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // fakeCloud is an in-memory Drive shared by several simulated devices.
@@ -86,14 +87,14 @@ func (f *fakeCloud) Trash(_ context.Context, id string) error {
 }
 
 type device struct {
-	t    *testing.T
-	root string
-	base Baseline
-	s    *Syncer
+	t     *testing.T
+	root  string
+	state GameState
+	s     *Syncer
 }
 
 func newDevice(t *testing.T, name string, cloud Cloud) *device {
-	return &device{t: t, root: t.TempDir(), base: Baseline{}, s: &Syncer{Cloud: cloud, Device: name, BackupDir: t.TempDir()}}
+	return &device{t: t, root: t.TempDir(), s: &Syncer{Cloud: cloud, Device: name, BackupDir: t.TempDir()}}
 }
 
 func (d *device) write(rel, content string) {
@@ -114,11 +115,11 @@ func (d *device) read(rel string) string {
 
 func (d *device) sync(keep Side) Result {
 	d.t.Helper()
-	next, res, err := d.s.Sync(context.Background(), GameRef{ID: "g", Root: d.root}, d.base, keep)
+	next, res, err := d.s.Sync(context.Background(), GameRef{ID: "g", Root: d.root}, d.state, keep)
 	if err != nil {
 		d.t.Fatalf("sync: %v", err)
 	}
-	d.base = next
+	d.state = next
 	return res
 }
 
@@ -190,7 +191,7 @@ func TestCorruptDownloadKeepsLocalFile(t *testing.T) {
 	pc.sync("")
 
 	cloud.corrupt = true
-	_, _, err := ally.s.Sync(context.Background(), GameRef{ID: "g", Root: ally.root}, ally.base, "")
+	_, _, err := ally.s.Sync(context.Background(), GameRef{ID: "g", Root: ally.root}, ally.state, "")
 	if err == nil {
 		t.Fatal("expected checksum error")
 	}
@@ -265,5 +266,97 @@ func TestRestoreBackup(t *testing.T) {
 	}
 	if err := pc.s.RestoreBackup(GameRef{ID: "g", Root: pc.root}, "../x.zip"); err == nil {
 		t.Fatal("expected invalid name error")
+	}
+}
+
+// A game left running on the handheld writes its old in-memory state right
+// after a newer save was downloaded: that must become a question.
+func TestDownloadGuard(t *testing.T) {
+	cloud := newFakeCloud()
+	pc, ally := newDevice(t, "PC", cloud), newDevice(t, "Ally", cloud)
+	now := time.Unix(1_800_000_000, 0)
+	ally.s.Now = func() time.Time { return now }
+	ally.s.GuardWindow = 10 * time.Minute
+
+	pc.write("save.sav", "v1")
+	pc.sync("")
+	ally.sync("")
+	pc.write("save.sav", "pc-v2")
+	pc.sync("")
+
+	now = now.Add(time.Hour)
+	if r := ally.sync(""); r.Downloaded != 1 || r.DownloadedFrom != "PC" {
+		t.Fatalf("download = %+v", r)
+	}
+	// Running game autosaves its stale state 3 minutes later.
+	now = now.Add(3 * time.Minute)
+	ally.write("save.sav", "stale ally state")
+	r := ally.sync("")
+	if !r.Guarded || len(r.Conflicts) != 1 || r.Uploaded != 0 {
+		t.Fatalf("guard did not trigger: %+v", r)
+	}
+	if got := cloud.files["g"]["save.sav"].data; string(got) != "pc-v2" {
+		t.Fatalf("cloud overwritten: %q", got)
+	}
+
+	// After the window, a normal local change uploads again.
+	ally.sync(KeepCloud)
+	now = now.Add(20 * time.Minute)
+	ally.write("save.sav", "ally-v3")
+	if r := ally.sync(""); r.Uploaded != 1 || r.Guarded {
+		t.Fatalf("after window = %+v", r)
+	}
+}
+
+func TestHashCacheSkipsUnchangedFiles(t *testing.T) {
+	root := t.TempDir()
+	p := filepath.Join(root, "a.sav")
+	os.WriteFile(p, []byte("one"), 0o644)
+	old := time.Now().Add(-time.Hour)
+	os.Chtimes(p, old, old)
+
+	first, err := ScanCached(root, nil, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Poison the cached hash: if the cache is used, the poisoned value survives.
+	cached := map[string]LocalFile{"a.sav": first["a.sav"]}
+	entry := cached["a.sav"]
+	entry.MD5 = "cached"
+	cached["a.sav"] = entry
+	second, _ := ScanCached(root, nil, cached, time.Now().UnixNano())
+	if second["a.sav"].MD5 != "cached" {
+		t.Fatalf("cache not used: %+v", second["a.sav"])
+	}
+	// A modified file is re-hashed.
+	os.WriteFile(p, []byte("two!"), 0o644)
+	third, _ := ScanCached(root, nil, cached, time.Now().UnixNano())
+	if third["a.sav"].MD5 == "cached" || third["a.sav"].MD5 == first["a.sav"].MD5 {
+		t.Fatalf("changed file not re-hashed: %+v", third["a.sav"])
+	}
+}
+
+func TestSnapshotRestoreExact(t *testing.T) {
+	d := newDevice(t, "PC", newFakeCloud())
+	d.write("a.sav", "a1")
+	d.write("sub/b.sav", "b1")
+	var buf bytes.Buffer
+	if err := WriteSnapshot(&buf, d.root, []string{"a.sav", "sub/b.sav"}); err != nil {
+		t.Fatal(err)
+	}
+	snap := filepath.Join(t.TempDir(), "v.zip")
+	os.WriteFile(snap, buf.Bytes(), 0o644)
+
+	d.write("a.sav", "a2-bad")
+	d.write("new.sav", "created later")
+	if err := d.s.RestoreZip(GameRef{ID: "g", Root: d.root}, snap, true); err != nil {
+		t.Fatal(err)
+	}
+	if d.read("a.sav") != "a1" || d.read("sub/b.sav") != "b1" || d.read("new.sav") != "<missing>" {
+		t.Fatalf("after restore: a=%q b=%q new=%q", d.read("a.sav"), d.read("sub/b.sav"), d.read("new.sav"))
+	}
+	backups, _ := ListBackups(d.s.BackupDir, "g")
+	if len(backups) != 1 || backups[0].Files != 3 {
+		t.Fatalf("safety backup = %+v", backups)
 	}
 }

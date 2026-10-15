@@ -57,6 +57,7 @@ function renderChips() {
     parts.push(`<span class="chip bad">${icon("drive")}Drive nepřipojen</span>`);
   }
   parts.push(`<span class="chip">${icon(deviceIcon(s.device))}Toto zařízení: ${esc(s.device)}</span>`);
+  if (d.connected && s.cloudChecked) parts.push(`<span class="chip subtle">${icon("refresh")}Cloud zkontrolován ${ago(s.cloudChecked)}</span>`);
   $("#chips").innerHTML = parts.join("");
 
   // Drive problems get a prominent notice with the fix right in it.
@@ -85,7 +86,9 @@ function card(g) {
       const bits = [`Synchronizováno ${ago(g.lastSync)}`];
       if (g.files) bits.push(files(g.files));
       if (g.bytes) bits.push(size(g.bytes));
-      return `<section class="card">${head("b-ok", "check", esc(bits.join(" · ")))}<div class="actions">${btn("sync", "Sync")}${more}</div></section>`;
+      if (g.watching) bits.push("sleduji změny");
+      const notice = g.notice ? `<div class="card-notice">${icon("alert")}<span>${esc(g.notice)}</span></div>` : "";
+      return `<section class="card">${head("b-ok", "check", esc(bits.join(" · ")))}<div class="actions">${btn("sync", "Sync")}${more}</div>${notice}</section>`;
     }
     case "syncing": {
       const p = g.progress || { direction: "up", done: 0, total: 0 };
@@ -100,7 +103,10 @@ function card(g) {
           <div class="meta">${esc(when(c.modified))}${c.files ? " · " + files(c.files) : ""}</div></div>
           ${`<button class="btn" data-act="keep-${c.side}" data-id="${esc(g.id)}">Ponechat</button>`}
         </div>`).join("");
-      return `<section class="card conflict">${head("b-warn", "merge", "Konflikt: zařízení mají jinou verzi. Kterou ponechat?", "warn")}<div class="actions">${more}</div><div class="sides">${sides}</div></section>`;
+      const why = g.guarded
+        ? "Save se změnil hned po stažení novější verze. Možná hra běžela se starým stavem. Kterou verzi ponechat?"
+        : "Konflikt: zařízení mají jinou verzi. Kterou ponechat?";
+      return `<section class="card conflict">${head("b-warn", "merge", why, "warn")}<div class="actions">${more}</div><div class="sides">${sides}</div></section>`;
     }
     case "cloud_only": {
       const meta = `Jen v cloudu${g.cloudDevice ? ` · naposledy z ${esc(g.cloudDevice)}` : ""}${g.cloudModified ? ` ${esc(when(g.cloudModified))}` : ""}`;
@@ -385,7 +391,8 @@ function gameMenu(g) {
       ${local ? item("sync", "refresh", "Synchronizovat teď") : item("setup", "down", "Nastavit na tomto zařízení")}
       ${local ? item("edit", "edit", "Upravit název, složku nebo filtr") : ""}
       ${local ? item("open-folder", "folder", "Otevřít složku se savy") : ""}
-      ${local ? item("backups", "history", "Zálohy a obnovení") : ""}
+      ${local ? item("versions", "history", "Historie verzí v cloudu") : ""}
+      ${local ? item("backups", "file", "Lokální zálohy") : ""}
       ${local ? item("remove", "unlink", "Přestat synchronizovat na tomto zařízení") : ""}
       ${item("delete-cloud", "trash", "Smazat z cloudu", "danger")}
     </div>`,
@@ -435,6 +442,44 @@ async function showBackups(g) {
   });
 }
 
+async function showVersions(g) {
+  let list;
+  try {
+    list = await api("GET", `/api/games/${encodeURIComponent(g.id)}/versions`);
+  } catch (e) {
+    toast(e.message);
+    return;
+  }
+  const rows = list.map((v, i) => `
+    <div class="row-item">
+      <div><div class="strong">${icon(deviceIcon(v.device))} ${esc(v.device || "?")} · ${esc(when(v.created))}${i === 0 ? ' <span class="pill">nejnovější</span>' : ""}</div>
+        <div class="muted">${files(v.files)} · ${size(v.bytes) || "0 B"}</div></div>
+      <button class="btn" data-version="${esc(v.id)}">Obnovit</button>
+    </div>`).join("");
+  const m = openModal({
+    title: `Historie verzí: ${g.name}`,
+    body: `<p class="lead">Snímek celé hry se v cloudu uloží po nahrání změn, nejvýš jednou za 30 minut a vždy při předání mezi zařízeními. Uchovává se ${state?.versions || 3} posledních (lze změnit v nastavení).</p>
+      ${rows || `<p class="muted pad">Zatím žádné verze. První vznikne při příštím nahrání změn.</p>`}`,
+  });
+  m.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-version]");
+    if (!b) return;
+    const ok = await confirmModal({
+      title: "Obnovit tuto verzi?",
+      text: "Savy na tomto zařízení se nahradí vybranou verzí a ta se pak nahraje jako aktuální na všechna zařízení. Současný stav se předtím zazálohuje (Lokální zálohy).",
+      confirm: "Obnovit verzi",
+    });
+    if (!ok) return;
+    try {
+      const data = await api("POST", `/api/games/${encodeURIComponent(g.id)}/versions/restore`, { id: b.dataset.version });
+      closeModal(m);
+      toast(data.message);
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+}
+
 // ---------- settings ----------
 
 function showSettings() {
@@ -446,6 +491,9 @@ function showSettings() {
       <label class="field"><span>Název tohoto zařízení</span>
         <input name="device" value="${esc(s.device)}" placeholder="ROG Ally" autocomplete="off">
         <small>Zobrazuje se u konfliktů a v cloudu, aby bylo jasné, odkud která verze pochází.</small></label>
+      <label class="field"><span>Počet uchovávaných verzí v cloudu</span>
+        <select name="versions">${[1, 2, 3, 4, 5].map((n) => `<option value="${n}"${n === (s.versions || 3) ? " selected" : ""}>${n}</option>`).join("")}</select>
+        <small>Kolik posledních snímků každé hry držet v cloudu pro návrat ke starší verzi.</small></label>
       <div class="field"><span>Google Drive</span>
         <div class="row-item">
           <div>${d.connected ? esc(d.account || "Připojeno") : d.needsReauth ? "Přihlášení vypršelo" : "Nepřipojeno"}</div>
@@ -459,7 +507,10 @@ function showSettings() {
   });
   m.querySelector("[data-submit]").addEventListener("click", () =>
     submitting(m, async () => {
-      const data = await api("POST", "/api/settings", { device: m.querySelector('input[name="device"]').value });
+      const data = await api("POST", "/api/settings", {
+        device: m.querySelector('input[name="device"]').value,
+        versions: Number(m.querySelector('select[name="versions"]').value),
+      });
       closeModal(m);
       toast(data.message);
     })
@@ -492,6 +543,8 @@ async function handle(kind, id) {
       return g && gameMenu(g);
     case "backups":
       return g && showBackups(g);
+    case "versions":
+      return g && showVersions(g);
     case "settings":
       return showSettings();
     case "remove": {

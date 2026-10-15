@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
@@ -165,3 +166,21 @@ func openFolder(path string) error {
 	cmd := exec.Command("explorer.exe", path)
 	return cmd.Start()
 }
+
+// Notify shows a Windows toast notification.
+func Notify(title, body string) error {
+	q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+	script := `[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
+$x = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+$t = $x.GetElementsByTagName('text')
+$t.Item(0).AppendChild($x.CreateTextNode(` + q(title) + `)) > $null
+$t.Item(1).AppendChild($x.CreateTextNode(` + q(body) + `)) > $null
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe').Show([Windows.UI.Notifications.ToastNotification]::new($x))`
+	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
+	return cmd.Start()
+}
+
+// DefaultScanInterval is how often every game is fully re-scanned as a
+// safety net next to the file watcher.
+const DefaultScanInterval = 30 * time.Minute

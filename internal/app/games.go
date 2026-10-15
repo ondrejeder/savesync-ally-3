@@ -200,6 +200,7 @@ func (a *App) AddGame(req web.GameRequest) (string, error) {
 	a.rootID = rootID
 	a.cloudGames = append(a.cloudGames, folder)
 	a.mu.Unlock()
+	a.updateWatcher()
 	a.enqueue(job{gameID: folder.ID})
 	return fmt.Sprintf("%s přidána, nahrávám savy…", req.Name), nil
 }
@@ -227,6 +228,7 @@ func (a *App) SetupGame(id string, req web.GameRequest) (string, error) {
 	if err := a.store.PutGame(store.Game{ID: id, Name: name, Root: req.Root, Include: req.Include}); err != nil {
 		return "", err
 	}
+	a.updateWatcher()
 	a.enqueue(job{gameID: id})
 	return fmt.Sprintf("%s nastavena. Pokud ve složce už jsou jiné savy, zeptám se, kterou verzi ponechat.", name), nil
 }
@@ -264,7 +266,7 @@ func (a *App) EditGame(id string, req web.GameRequest) (string, error) {
 	// A different folder or filter means the old baseline no longer describes
 	// this folder; start fresh so differences become a question, not a deletion.
 	if !platform.SamePath(req.Root, game.Root) || strings.Join(req.Include, "\n") != strings.Join(game.Include, "\n") {
-		if err := a.store.SaveBaseline(id, engine.Baseline{}); err != nil {
+		if err := a.store.ResetBaseline(id); err != nil {
 			return "", err
 		}
 	}
@@ -272,6 +274,7 @@ func (a *App) EditGame(id string, req web.GameRequest) (string, error) {
 	if err := a.store.PutGame(game); err != nil {
 		return "", err
 	}
+	a.updateWatcher()
 	a.enqueue(job{gameID: id})
 	return "Uloženo.", nil
 }
@@ -310,7 +313,7 @@ func (a *App) RemoveGame(id string, deleteCloud bool) (string, error) {
 	a.mu.Lock()
 	delete(a.games, id)
 	a.mu.Unlock()
-	a.notify()
+	a.updateWatcher()
 	if deleteCloud {
 		return fmt.Sprintf("%s smazána z cloudu (v koši Google Drive zůstane 30 dní). Lokální soubory zůstaly.", name), nil
 	}
@@ -336,9 +339,20 @@ func (a *App) RestoreBackup(id, name string) (string, error) {
 	if !ok {
 		return "", errors.New("Hra nebyla nalezena.")
 	}
-	if err := a.syncer.RestoreBackup(engine.GameRef{ID: id, Root: game.Root, Include: game.Include}, name); err != nil {
+	a.mu.Lock()
+	w := a.watcher
+	a.mu.Unlock()
+	if w != nil {
+		w.Pause(id)
+	}
+	err := a.syncer.RestoreBackup(engine.GameRef{ID: id, Root: game.Root, Include: game.Include}, name)
+	if w != nil {
+		w.Resume(id)
+	}
+	if err != nil {
 		return "", err
 	}
+	a.clearGuard(id)
 	a.enqueue(job{gameID: id})
 	return "Záloha obnovena, synchronizuji…", nil
 }
@@ -351,9 +365,15 @@ func (a *App) SaveSettings(s web.Settings) (string, error) {
 	if len([]rune(device)) > 40 {
 		return "", errors.New("Název zařízení je moc dlouhý.")
 	}
+	if s.Versions < 1 || s.Versions > 5 {
+		return "", errors.New("Počet verzí musí být 1 až 5.")
+	}
 	if err := a.store.SetDevice(device); err != nil {
 		return "", err
 	}
-	a.notify()
+	if err := a.store.SetVersions(s.Versions); err != nil {
+		return "", err
+	}
+	a.notifyUI()
 	return "Nastavení uloženo.", nil
 }

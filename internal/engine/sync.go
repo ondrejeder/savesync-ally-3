@@ -31,17 +31,44 @@ type GameRef struct {
 	Include []string
 }
 
+// GameState is what a device remembers about a game between syncs. It is
+// stored locally and never shared with other devices.
+type GameState struct {
+	Baseline Baseline `json:"baseline"`
+	// Hashes caches the last scan so unchanged files are not re-hashed.
+	Hashes    map[string]LocalFile `json:"hashes,omitempty"`
+	ScannedAt int64                `json:"scannedAt,omitempty"` // unix nanoseconds
+	// Downloads remembers when each file was last written from the cloud,
+	// for the "game still running with an old save" guard.
+	Downloads map[string]int64 `json:"downloads,omitempty"`
+}
+
+func (st GameState) clone() GameState {
+	out := GameState{Baseline: Baseline{}, Hashes: st.Hashes, ScannedAt: st.ScannedAt, Downloads: map[string]int64{}}
+	for k, v := range st.Baseline {
+		out.Baseline[k] = v
+	}
+	for k, v := range st.Downloads {
+		out.Downloads[k] = v
+	}
+	return out
+}
+
 // Result describes what one sync run did.
 type Result struct {
-	Conflicts  []string
-	Uploaded   int
-	Downloaded int
-	Deleted    int
-	Files      int   // files in sync after the run
-	Bytes      int64 // their total size
-	Backup     string
-	Local      map[string]LocalFile
-	Cloud      map[string]CloudFile
+	Conflicts []string
+	// Guarded means the conflict was raised by the download guard: local
+	// files changed shortly after a newer cloud version was downloaded.
+	Guarded        bool
+	Uploaded       int
+	Downloaded     int
+	Deleted        int
+	DownloadedFrom string // device that produced the downloaded files
+	Files          int    // files in sync after the run
+	Bytes          int64  // their total size
+	Backup         string
+	Local          map[string]LocalFile
+	Cloud          map[string]CloudFile
 }
 
 // Changed reports whether any file was transferred or deleted.
@@ -53,22 +80,37 @@ type Syncer struct {
 	Device      string
 	BackupDir   string
 	KeepBackups int
+	// GuardWindow: a local change within this time after a download is not
+	// uploaded automatically but reported as a conflict. Zero disables it.
+	GuardWindow time.Duration
 	Progress    func(done, total int, up bool)
+	Now         func() time.Time
+}
+
+func (s *Syncer) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 // Sync brings one game in sync. With keep set, it resolves a conflict by
-// making the other side an exact copy. It returns the new baseline, which the
+// making the other side an exact copy. It returns the new state, which the
 // caller must persist; on partial failure the baseline only contains the
 // files that really are in sync, so the next run retries the rest.
-func (s *Syncer) Sync(ctx context.Context, game GameRef, base Baseline, keep Side) (Baseline, Result, error) {
+func (s *Syncer) Sync(ctx context.Context, game GameRef, st GameState, keep Side) (GameState, Result, error) {
 	var res Result
-	local, err := Scan(game.Root, game.Include)
+	now := s.now()
+	local, err := ScanCached(game.Root, game.Include, st.Hashes, st.ScannedAt)
 	if err != nil {
-		return base, res, err
+		return st, res, err
 	}
+	next := st.clone()
+	next.Hashes, next.ScannedAt = local, now.UnixNano()
+
 	cloud, err := s.Cloud.ListFiles(ctx, game.ID)
 	if err != nil {
-		return base, res, err
+		return next, res, err
 	}
 	for rel := range cloud {
 		if !safeRel(rel) {
@@ -80,12 +122,28 @@ func (s *Syncer) Sync(ctx context.Context, game GameRef, base Baseline, keep Sid
 	var plan Plan
 	if keep != "" {
 		plan = ResolvePlan(local, cloud, keep)
+		next.Downloads = map[string]int64{} // the user decided; no guard left to apply
 	} else {
-		plan = MakePlan(base, local, cloud)
+		plan = MakePlan(st.Baseline, local, cloud)
 	}
 	if len(plan.Conflicts) > 0 {
 		res.Conflicts = plan.Conflicts
-		return base, res, nil
+		return next, res, nil
+	}
+
+	// Download guard: a game that was running while a newer save arrived may
+	// write its old in-memory state back. Ask instead of uploading it.
+	if keep == "" && s.GuardWindow > 0 {
+		var guarded []string
+		for _, a := range plan.Actions {
+			if t, ok := st.Downloads[a.Path]; ok && a.Kind == Upload && now.Sub(time.Unix(t, 0)) < s.GuardWindow {
+				guarded = append(guarded, a.Path)
+			}
+		}
+		if len(guarded) > 0 {
+			res.Conflicts, res.Guarded = guarded, true
+			return next, res, nil
+		}
 	}
 
 	// Back up every local file that is about to be overwritten or deleted.
@@ -98,14 +156,14 @@ func (s *Syncer) Sync(ctx context.Context, game GameRef, base Baseline, keep Sid
 	if len(risky) > 0 {
 		backup, err := s.backup(game, risky)
 		if err != nil {
-			return base, res, fmt.Errorf("záloha před přepsáním selhala: %w", err)
+			return next, res, fmt.Errorf("záloha před přepsáním selhala: %w", err)
 		}
 		res.Backup = backup
 	}
 
-	next := Baseline{}
-	for k, v := range base {
-		next[k] = v
+	hashes := map[string]LocalFile{}
+	for k, v := range local {
+		hashes[k] = v
 	}
 	total, done := 0, 0
 	for _, a := range plan.Actions {
@@ -128,41 +186,59 @@ func (s *Syncer) Sync(ctx context.Context, game GameRef, base Baseline, keep Sid
 			var md5sum string
 			md5sum, err = s.upload(ctx, game, a, local[a.Path])
 			if err == nil {
-				next[a.Path] = md5sum
+				next.Baseline[a.Path] = md5sum
+				delete(next.Downloads, a.Path)
 				res.Uploaded++
 			}
 		case Download:
 			done++
 			s.progress(done, total, false)
-			err = s.download(ctx, game, cloud[a.Path], a.Path)
+			c := cloud[a.Path]
+			err = s.download(ctx, game, c, a.Path)
 			if err == nil {
-				next[a.Path] = cloud[a.Path].MD5
+				next.Baseline[a.Path] = c.MD5
+				next.Downloads[a.Path] = now.Unix()
+				if lf, ok := statLocal(game, a.Path, c.MD5); ok {
+					hashes[a.Path] = lf
+				}
+				if c.Device != "" {
+					res.DownloadedFrom = c.Device
+				}
 				res.Downloaded++
 			}
 		case DeleteCloud:
 			err = s.Cloud.Trash(ctx, a.CloudID)
 			if err == nil {
-				delete(next, a.Path)
+				delete(next.Baseline, a.Path)
 				res.Deleted++
 			}
 		case DeleteLocal:
 			err = os.Remove(filepath.Join(game.Root, filepath.FromSlash(a.Path)))
 			if err == nil || errors.Is(err, os.ErrNotExist) {
 				err = nil
-				delete(next, a.Path)
+				delete(next.Baseline, a.Path)
+				delete(hashes, a.Path)
 				res.Deleted++
 			}
 		case Accept:
-			next[a.Path] = local[a.Path].MD5
+			next.Baseline[a.Path] = local[a.Path].MD5
 		case Forget:
-			delete(next, a.Path)
+			delete(next.Baseline, a.Path)
 		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s %s: %w", a.Kind, a.Path, err))
 		}
 	}
+	next.Hashes = hashes
 
-	for rel, md5sum := range next {
+	// Forget download times once the guard window is over.
+	for p, t := range next.Downloads {
+		if now.Sub(time.Unix(t, 0)) >= s.GuardWindow {
+			delete(next.Downloads, p)
+		}
+	}
+
+	for rel, md5sum := range next.Baseline {
 		if l, ok := local[rel]; ok && l.MD5 == md5sum {
 			res.Files++
 			res.Bytes += l.Size
@@ -172,6 +248,15 @@ func (s *Syncer) Sync(ctx context.Context, game GameRef, base Baseline, keep Sid
 		}
 	}
 	return next, res, errors.Join(errs...)
+}
+
+// statLocal builds a hash-cache entry for a file whose content is known.
+func statLocal(game GameRef, rel, md5sum string) (LocalFile, bool) {
+	info, err := os.Stat(filepath.Join(game.Root, filepath.FromSlash(rel)))
+	if err != nil {
+		return LocalFile{}, false
+	}
+	return LocalFile{MD5: md5sum, Size: info.Size(), MTime: info.ModTime().Unix(), ModNano: info.ModTime().UnixNano()}, true
 }
 
 func (s *Syncer) progress(done, total int, up bool) {
@@ -390,23 +475,42 @@ func (s *Syncer) RestoreBackup(game GameRef, name string) error {
 	if name != filepath.Base(name) || !strings.HasSuffix(name, ".zip") {
 		return errors.New("neplatný název zálohy")
 	}
-	zr, err := zip.OpenReader(filepath.Join(s.BackupDir, game.ID, name))
+	return s.RestoreZip(game, filepath.Join(s.BackupDir, game.ID, name), false)
+}
+
+// RestoreZip extracts an archive into the game folder after backing up the
+// files it touches. With exact, local files that are not in the archive are
+// removed too (after the backup), so the folder matches the archive.
+func (s *Syncer) RestoreZip(game GameRef, zipPath string, exact bool) error {
+	zr, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return err
 	}
 	defer zr.Close()
 
-	var existing []string
+	inZip := map[string]bool{}
 	for _, f := range zr.File {
 		if !safeRel(f.Name) {
-			return fmt.Errorf("záloha obsahuje neplatnou cestu %q", f.Name)
+			return fmt.Errorf("archiv obsahuje neplatnou cestu %q", f.Name)
 		}
-		if _, err := os.Stat(filepath.Join(game.Root, filepath.FromSlash(f.Name))); err == nil {
-			existing = append(existing, f.Name)
+		inZip[f.Name] = true
+	}
+	local, err := Scan(game.Root, game.Include)
+	if err != nil && !errors.Is(err, ErrRootMissing) {
+		return err
+	}
+	var touched, extra []string
+	for rel := range local {
+		switch {
+		case inZip[rel]:
+			touched = append(touched, rel)
+		case exact:
+			touched = append(touched, rel)
+			extra = append(extra, rel)
 		}
 	}
-	if len(existing) > 0 {
-		if _, err := s.backup(game, existing); err != nil {
+	if len(touched) > 0 {
+		if _, err := s.backup(game, touched); err != nil {
 			return err
 		}
 	}
@@ -415,7 +519,25 @@ func (s *Syncer) RestoreBackup(game GameRef, name string) error {
 			return err
 		}
 	}
+	for _, rel := range extra {
+		if err := os.Remove(filepath.Join(game.Root, filepath.FromSlash(rel))); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
 	return nil
+}
+
+// WriteSnapshot zips the given local files of a game into w.
+func WriteSnapshot(w io.Writer, root string, rels []string) error {
+	zw := zip.NewWriter(w)
+	sort.Strings(rels)
+	for _, rel := range rels {
+		if err := addToZip(zw, filepath.Join(root, filepath.FromSlash(rel)), rel); err != nil {
+			zw.Close()
+			return err
+		}
+	}
+	return zw.Close()
 }
 
 func extract(f *zip.File, dst string) error {

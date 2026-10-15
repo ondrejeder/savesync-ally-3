@@ -81,6 +81,38 @@ server ho vymění za HttpOnly cookie. Kontroluje se i hlavička `Host` (ochrana
 - **Jedna fronta, jeden worker**: watcher, časovač, UI i restore jen řadí hry do fronty → žádné souběhy.
 - fsnotify rekurzivně + debounce ~10 s klidu (nesynchronizovat soubor, do kterého hra zapisuje).
 
+## Detekce změn (fáze 4)
+
+- **Lokálně:** rekurzivní fsnotify na kořen každé hry; sync po 10 s klidu, nejpozději 2 min při
+  nepřetržitém zápisu. Vlastní zápisy (stahování, obnova) watcher ignoruje (`Pause`/`Resume`).
+- **Cloud:** Drive Changes API 1× za minutu; změněný soubor → podle rodiče jen dotčená hra.
+  Pozice v logu změn se ukládá (`state/drive-changes.token`), při expiraci plná kontrola.
+- **Pojistky:** plná kontrola po probuzení ze spánku (zpožděný tik), po výpadku sítě
+  a každých 30 min (`platform.DefaultScanInterval`, na Androidu se počítá s kratším).
+- **Cache hashů:** MD5 se přepočítává jen u souborů se změněnou velikostí nebo časem
+  (soubory změněné < 2 s před minulým skenem se pro jistotu hashují znovu).
+- **Zamčené soubory** (hra má save otevřený): sync se zopakuje za minutu, nehlásí chybu.
+
+## Pojistka po stažení
+
+Lokální změna souboru do 10 min po jeho stažení z cloudu se nenahraje automaticky, ale ukáže
+se jako konflikt („možná hra běžela se starým stavem“). Po stažení UI i notifikace radí hru
+restartovat.
+
+## Verze v cloudu
+
+- Po nahrání změn se snímek celé hry (zip souborů v syncu) uloží do `<gameId>/.versions/`.
+- Nejvýš 1 verze za 30 min ze stejného zařízení; při předání mezi zařízeními vždy.
+- Uchovává se N posledních (výchozí 3, nastavení 1–5), starší se mažou natrvalo.
+- Obnova: lokální zálohu aktuálního stavu → přesné rozbalení verze (smaže i soubory, které
+  ve verzi nejsou) → nahrání jako nová aktuální verze.
+
+## Notifikace
+
+`platform.Notify`: Windows toast (přes PowerShell), Linux `notify-send`/`gdbus`. Konflikt,
+pojistka, stažení z jiného zařízení, smazání hry z cloudu, vypršelé přihlášení; max. 1 za
+10 min pro stejnou událost a hru.
+
 ## Self-update
 
 1. `build.ps1` sestaví obě binárky, `savesync publish` je nahraje do `.app/` s `latest.json` (verze, sha256).
@@ -99,9 +131,15 @@ server ho vymění za HttpOnly cookie. Kontroluje se i hlavička `Host` (ochrana
 
 ## Fáze
 
-1. Kostra: binárka, okno, install/autostart, UI s demo daty.
-2. Drive klient + OAuth, plánovač s testy.
-3. Hlavní UI: přidání hry, sync, nastavení na druhém zařízení, konflikty.
-4. Watcher, Changes API, lokální zálohy.
+1. ✅ Kostra: binárka, okno, install/autostart, UI s demo daty.
+2. ✅ Drive klient + OAuth, plánovač s testy.
+3. ✅ Hlavní UI: přidání hry, sync, nastavení na druhém zařízení, konflikty, lokální zálohy.
+4. ✅ Watcher, Changes API, cache hashů, pojistka po stažení, notifikace, verze v cloudu.
 5. Self-update a publish.
 6. Migrace z v2 (import seznamu her a cest), test na Ally.
+
+## Později: Linux ARM64 a Android (AYN Odin 3)
+
+- Linux ARM64: další cíl v `build.ps1`, self-update vybírá binárku podle architektury.
+- Android: lehké APK (Kotlin foreground service s Go jádrem + WebView na lokální UI),
+  notifikace přes Android, emulátory ukládají do nastavitelných složek ve sdíleném úložišti.

@@ -93,3 +93,29 @@ func TestEscape(t *testing.T) {
 		t.Fatalf("escape = %s", got)
 	}
 }
+
+func TestChanges(t *testing.T) {
+	calls := 0
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		switch r.URL.Query().Get("pageToken") {
+		case "1":
+			json.NewEncoder(w).Encode(map[string]any{"nextPageToken": "2", "changes": []map[string]any{
+				{"fileId": "a", "file": map[string]any{"parents": []string{"game1"}, "appProperties": map[string]string{"device": "PC"}}},
+			}})
+		case "2":
+			json.NewEncoder(w).Encode(map[string]any{"newStartPageToken": "3", "changes": []map[string]any{
+				{"fileId": "b", "removed": true},
+			}})
+		default:
+			http.Error(w, `{"error":{"message":"Invalid page token"}}`, http.StatusNotFound)
+		}
+	}))
+	changes, next, err := c.Changes(context.Background(), "1")
+	if err != nil || next != "3" || len(changes) != 2 || changes[0].Parents[0] != "game1" || changes[0].Device != "PC" || !changes[1].Removed {
+		t.Fatalf("changes=%+v next=%s err=%v", changes, next, err)
+	}
+	if _, _, err := c.Changes(context.Background(), "old"); err != ErrChangesExpired {
+		t.Fatalf("err = %v, want ErrChangesExpired", err)
+	}
+}

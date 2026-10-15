@@ -9,7 +9,10 @@ type State struct {
 	Demo      bool        `json:"demo"`
 	Drive     DriveStatus `json:"drive"`
 	Autostart bool        `json:"autostart"`
-	Games     []Game      `json:"games"`
+	Versions  int         `json:"versions"`
+	// CloudChecked is when the Drive change log was last checked.
+	CloudChecked string `json:"cloudChecked,omitempty"`
+	Games        []Game `json:"games"`
 }
 
 type DriveStatus struct {
@@ -31,12 +34,17 @@ const (
 )
 
 type Game struct {
-	ID       string    `json:"id"`
-	Name     string    `json:"name"`
-	Root     string    `json:"root,omitempty"`
-	Include  []string  `json:"include,omitempty"`
-	Status   string    `json:"status"`
-	Message  string    `json:"message,omitempty"`
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	Root    string   `json:"root,omitempty"`
+	Include []string `json:"include,omitempty"`
+	Status  string   `json:"status"`
+	Message string   `json:"message,omitempty"`
+	// Notice is a temporary hint, e.g. "restart the game" after a download.
+	Notice   string `json:"notice,omitempty"`
+	Watching bool   `json:"watching,omitempty"`
+	// Guarded marks a conflict raised by the download guard.
+	Guarded  bool      `json:"guarded,omitempty"`
 	LastSync string    `json:"lastSync,omitempty"`
 	Files    int       `json:"files"`
 	Bytes    int64     `json:"bytes"`

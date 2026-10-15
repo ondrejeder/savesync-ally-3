@@ -18,7 +18,18 @@ type Backend interface {
 	RemoveGame(id string, deleteCloud bool) (string, error)
 	Backups(id string) ([]Backup, error)
 	RestoreBackup(id, name string) (string, error)
+	Versions(id string) ([]Version, error)
+	RestoreVersion(id, versionID string) (string, error)
 	SaveSettings(s Settings) (string, error)
+}
+
+// Version is a cloud snapshot of a whole game.
+type Version struct {
+	ID      string `json:"id"`
+	Device  string `json:"device"`
+	Created string `json:"created"`
+	Files   int    `json:"files"`
+	Bytes   int64  `json:"bytes"`
 }
 
 type GameRequest struct {
@@ -28,7 +39,8 @@ type GameRequest struct {
 }
 
 type Settings struct {
-	Device string `json:"device"`
+	Device   string `json:"device"`
+	Versions int    `json:"versions"`
 }
 
 // Listing is one folder in the folder picker.
@@ -86,6 +98,16 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.Handle("POST /api/games/{id}/backups/restore", s.auth(jsonHandler(func(req struct{ Name string }, r *http.Request) (any, error) {
 		return message(s.Backend.RestoreBackup(r.PathValue("id"), req.Name))
 	})))
+	mux.Handle("GET /api/games/{id}/versions", s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		versions, err := s.Backend.Versions(r.PathValue("id"))
+		if versions == nil {
+			versions = []Version{}
+		}
+		reply(w, versions, err)
+	})))
+	mux.Handle("POST /api/games/{id}/versions/restore", s.auth(jsonHandler(func(req struct{ ID string }, r *http.Request) (any, error) {
+		return message(s.Backend.RestoreVersion(r.PathValue("id"), req.ID))
+	})))
 	mux.Handle("POST /api/settings", s.auth(jsonHandler(func(req Settings, _ *http.Request) (any, error) {
 		return message(s.Backend.SaveSettings(req))
 	})))
@@ -125,4 +147,6 @@ func (Unimplemented) EditGame(string, GameRequest) (string, error)  { return "",
 func (Unimplemented) RemoveGame(string, bool) (string, error)       { return "", ErrNotImplemented }
 func (Unimplemented) Backups(string) ([]Backup, error)              { return nil, ErrNotImplemented }
 func (Unimplemented) RestoreBackup(string, string) (string, error)  { return "", ErrNotImplemented }
+func (Unimplemented) Versions(string) ([]Version, error)            { return nil, ErrNotImplemented }
+func (Unimplemented) RestoreVersion(string, string) (string, error) { return "", ErrNotImplemented }
 func (Unimplemented) SaveSettings(Settings) (string, error)         { return "", ErrNotImplemented }

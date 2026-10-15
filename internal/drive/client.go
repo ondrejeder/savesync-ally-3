@@ -60,6 +60,8 @@ type file struct {
 	MD5           string            `json:"md5Checksum"`
 	Size          string            `json:"size"`
 	ModifiedTime  string            `json:"modifiedTime"`
+	Trashed       bool              `json:"trashed"`
+	Parents       []string          `json:"parents"`
 	AppProperties map[string]string `json:"appProperties"`
 }
 
@@ -178,45 +180,48 @@ func (c *Client) Upload(ctx context.Context, gameID, existingID, rel string, bod
 	} else {
 		meta["parents"] = []string{gameID}
 	}
-	target += "?uploadType=resumable&fields=id,md5Checksum,size"
+	f, err := c.uploadResumable(ctx, method, target+"?uploadType=resumable&fields=id,md5Checksum,size", meta, body, size)
+	if err != nil {
+		return engine.CloudFile{}, err
+	}
+	n, _ := strconv.ParseInt(f.Size, 10, 64)
+	return engine.CloudFile{ID: f.ID, MD5: f.MD5, Size: n, MTime: mtime, Device: device}, nil
+}
 
-	// Step 1: open a resumable session.
+// uploadResumable opens a resumable upload session and sends the content in
+// one request (works for any size, unlike multipart uploads).
+func (c *Client) uploadResumable(ctx context.Context, method, target string, meta map[string]any, body io.Reader, size int64) (file, error) {
 	metaJSON, _ := json.Marshal(meta)
 	req, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(metaJSON))
 	if err != nil {
-		return engine.CloudFile{}, err
+		return file{}, err
 	}
 	req.Header.Set("Content-Type", "application/json; charset=UTF-8")
 	req.Header.Set("X-Upload-Content-Type", "application/octet-stream")
 	req.Header.Set("X-Upload-Content-Length", strconv.FormatInt(size, 10))
 	resp, err := c.do(req)
 	if err != nil {
-		return engine.CloudFile{}, err
+		return file{}, err
 	}
 	resp.Body.Close()
 	session := resp.Header.Get("Location")
 	if session == "" {
-		return engine.CloudFile{}, errors.New("drive: upload session has no Location")
+		return file{}, errors.New("drive: upload session has no Location")
 	}
 
-	// Step 2: send the content in one request.
 	put, err := http.NewRequestWithContext(ctx, http.MethodPut, session, body)
 	if err != nil {
-		return engine.CloudFile{}, err
+		return file{}, err
 	}
 	put.ContentLength = size
 	put.Header.Set("Content-Type", "application/octet-stream")
 	resp, err = c.do(put)
 	if err != nil {
-		return engine.CloudFile{}, err
+		return file{}, err
 	}
 	defer resp.Body.Close()
 	var f file
-	if err := json.NewDecoder(resp.Body).Decode(&f); err != nil {
-		return engine.CloudFile{}, err
-	}
-	n, _ := strconv.ParseInt(f.Size, 10, 64)
-	return engine.CloudFile{ID: f.ID, MD5: f.MD5, Size: n, MTime: mtime, Device: device}, nil
+	return f, json.NewDecoder(resp.Body).Decode(&f)
 }
 
 // Download streams a file's content into w.

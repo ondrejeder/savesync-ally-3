@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/ondrejeder/savesync-ally-3/internal/engine"
@@ -21,9 +22,13 @@ type Game struct {
 }
 
 type Config struct {
-	Device string `json:"device"`
-	Games  []Game `json:"games"`
+	Device   string `json:"device"`
+	Versions int    `json:"versions,omitempty"`
+	Games    []Game `json:"games"`
 }
+
+// DefaultVersions is how many cloud versions are kept unless configured.
+const DefaultVersions = 3
 
 type Store struct {
 	mu       sync.Mutex
@@ -116,25 +121,69 @@ func (s *Store) SetDevice(name string) error {
 	return s.saveLocked()
 }
 
-// Baseline returns the last synced state of a game on this device.
-func (s *Store) Baseline(id string) (engine.Baseline, error) {
-	base := engine.Baseline{}
+// State returns what this device remembers about a game (baseline, hash
+// cache, recent downloads). Files from older builds held only the baseline.
+func (s *Store) State(id string) (engine.GameState, error) {
+	var st engine.GameState
 	data, err := os.ReadFile(s.baselinePath(id))
 	if errors.Is(err, os.ErrNotExist) {
-		return base, nil
+		return engine.GameState{Baseline: engine.Baseline{}}, nil
 	}
 	if err != nil {
-		return nil, err
+		return st, err
 	}
-	return base, json.Unmarshal(data, &base)
+	if err := json.Unmarshal(data, &st); err != nil || st.Baseline == nil {
+		var legacy engine.Baseline
+		if json.Unmarshal(data, &legacy) == nil {
+			return engine.GameState{Baseline: legacy}, nil
+		}
+		if err != nil {
+			return st, err
+		}
+		st.Baseline = engine.Baseline{}
+	}
+	return st, nil
 }
 
-func (s *Store) SaveBaseline(id string, base engine.Baseline) error {
-	data, err := json.MarshalIndent(base, "", "  ")
+func (s *Store) SaveState(id string, st engine.GameState) error {
+	data, err := json.Marshal(st)
 	if err != nil {
 		return err
 	}
 	return WriteFileAtomic(s.baselinePath(id), data, 0o644)
+}
+
+// ResetBaseline forgets the last synced state (e.g. after changing the
+// folder), so differences are asked about instead of propagated.
+func (s *Store) ResetBaseline(id string) error {
+	return s.SaveState(id, engine.GameState{Baseline: engine.Baseline{}})
+}
+
+// ChangesToken is the saved Drive Changes API position.
+func (s *Store) ChangesToken() string {
+	data, _ := os.ReadFile(filepath.Join(s.stateDir, "drive-changes.token"))
+	return strings.TrimSpace(string(data))
+}
+
+func (s *Store) SaveChangesToken(token string) error {
+	return WriteFileAtomic(filepath.Join(s.stateDir, "drive-changes.token"), []byte(token), 0o644)
+}
+
+// Versions is how many cloud versions of each game to keep (1-5).
+func (s *Store) Versions() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cfg.Versions < 1 || s.cfg.Versions > 5 {
+		return DefaultVersions
+	}
+	return s.cfg.Versions
+}
+
+func (s *Store) SetVersions(n int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cfg.Versions = n
+	return s.saveLocked()
 }
 
 func (s *Store) baselinePath(id string) string {

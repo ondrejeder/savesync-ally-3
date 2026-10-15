@@ -5,9 +5,10 @@ import "sort"
 
 // LocalFile is a file found under the game's root on this device.
 type LocalFile struct {
-	MD5   string
-	Size  int64
-	MTime int64 // unix seconds
+	MD5     string `json:"md5"`
+	Size    int64  `json:"size"`
+	MTime   int64  `json:"mtime"` // unix seconds
+	ModNano int64  `json:"mod"`   // exact modification time, for the hash cache
 }
 
 // CloudFile is a file stored in the game's Drive folder.

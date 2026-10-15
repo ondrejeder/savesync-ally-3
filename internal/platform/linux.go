@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"syscall"
+	"time"
 )
 
 const serviceName = "savesync-ally3.service"
@@ -227,3 +228,23 @@ func Places() []Place {
 func openFolder(path string) error {
 	return openDefault(path)
 }
+
+// Notify shows a desktop notification (freedesktop notifications).
+func Notify(title, body string) error {
+	icon := ""
+	if data, err := DataDir(); err == nil {
+		icon = filepath.Join(data, "icon.svg")
+	}
+	if path, err := exec.LookPath("notify-send"); err == nil {
+		return exec.Command(path, "-a", "SaveSync Ally", "-i", icon, title, body).Start()
+	}
+	return exec.Command("gdbus", "call", "--session",
+		"--dest", "org.freedesktop.Notifications",
+		"--object-path", "/org/freedesktop/Notifications",
+		"--method", "org.freedesktop.Notifications.Notify",
+		"SaveSync Ally", "0", icon, title, body, "[]", "{}", "10000").Start()
+}
+
+// DefaultScanInterval is how often every game is fully re-scanned as a
+// safety net next to the file watcher.
+const DefaultScanInterval = 30 * time.Minute
