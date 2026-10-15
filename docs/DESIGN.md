@@ -115,7 +115,7 @@ pojistka, stažení z jiného zařízení, smazání hry z cloudu, vypršelé p�
 
 ## Self-update
 
-1. `scriptselease.ps1 -Version X.Y.Z -Notes "…"` (čistý repozitář): vytvoří tag `vX.Y.Z`, sestaví
+1. `scripts\release.ps1 -Version X.Y.Z -Notes "…"` (čistý repozitář): vytvoří tag `vX.Y.Z`, sestaví
    binárky a `savesync publish` je nahraje do `SaveSync Ally 3/.app/` (stejný název = stejné ID souboru).
    `latest.json` jde až nakonec: verze, poznámky a pro každou platformu (`windows-amd64`,
    `linux-amd64`, později `linux-arm64`) ID souboru, velikost a SHA-256.

@@ -37,7 +37,7 @@ Bez něj se použije Firefox v kiosk režimu, případně výchozí prohlížeč
 ## Vydání nové verze
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scriptselease.ps1 -Version 3.0.1 -Notes "Co je nového"
+powershell -ExecutionPolicy Bypass -File scripts\release.ps1 -Version 3.0.1 -Notes "Co je nového"
 ```
 
 Vytvoří tag, sestaví obě binárky a nahraje je na Google Drive (účet přihlášený v aplikaci na tomto PC).
