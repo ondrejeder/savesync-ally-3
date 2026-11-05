@@ -229,6 +229,9 @@ func openFolder(path string) error {
 	return openDefault(path)
 }
 
+// RegisterNotifications is not needed on Linux (the icon is passed per notification).
+func RegisterNotifications() error { return nil }
+
 // Notify shows a desktop notification (freedesktop notifications).
 func Notify(title, body string) error {
 	icon := ""

@@ -41,7 +41,7 @@ function files(n) {
   return `${n} souborů`;
 }
 function deviceIcon(name) {
-  return /ally|deck|handheld|legion/i.test(name || "") ? "gamepad" : "desktop";
+  return /ally|deck|handheld|legion|odin|ayn|steam ?os/i.test(name || "") ? "gamepad" : "desktop";
 }
 
 // ---------- rendering ----------
@@ -268,12 +268,14 @@ function gameForm({ mode, game }) {
     title: titles[mode],
     body: `
       <p class="lead">${intro[mode]}</p>
+      ${mode === "setup" ? `<div class="hint" data-hint hidden></div>` : ""}
       ${mode !== "setup" ? `<label class="field"><span>Název hry</span><input name="name" value="${esc(game?.name || "")}" placeholder="Hollow Knight" autocomplete="off"></label>` : ""}
       <div class="field"><span>Složka se savy</span>
         <div class="path-row">
           <div class="path ${game?.root ? "" : "empty"}" data-path>${esc(game?.root || "Zatím nevybráno")}</div>
           <button class="btn" type="button" data-pick>${icon("folder")}Vybrat složku</button>
         </div>
+        <div data-check></div>
       </div>
       <label class="field"><span>Filtr souborů <em>(nepovinné)</em></span>
         <input name="include" value="${esc((game?.include || []).join("; "))}" placeholder="*.sav; profile*.dat" autocomplete="off">
@@ -283,15 +285,49 @@ function gameForm({ mode, game }) {
   });
   let root = game?.root || "";
   const pathEl = m.querySelector("[data-path]");
-  m.querySelector("[data-pick]").addEventListener("click", async () => {
-    const picked = await pickFolder(root);
-    if (!picked) return;
-    root = picked.path;
+  const includeEl = m.querySelector('input[name="include"]');
+  // Setup on a new device: show how the other devices have this game set up
+  // and check that the chosen folder contains the cloud files.
+  let hintSeq = 0;
+  const loadHint = async () => {
+    if (mode !== "setup") return;
+    const seq = ++hintSeq;
+    const query = root ? `?root=${encodeURIComponent(root)}` : "";
+    let h;
+    try {
+      h = await api("GET", `/api/games/${encodeURIComponent(game.id)}/hint${query}`);
+    } catch {
+      return; // the hint is optional
+    }
+    if (seq !== hintSeq || !m.isConnected) return;
+    const box = m.querySelector("[data-hint]");
+    box.innerHTML = hintBox(h);
+    box.hidden = !box.innerHTML.trim();
+    const checkEl = m.querySelector("[data-check]");
+    checkEl.innerHTML = checkLine(h.check, root);
+    if (h.check && h.check.status !== "ok") checkEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const prev = h.devices.find((d) => d.include?.length);
+    if (prev && !includeEl.value.trim() && !includeEl.dataset.touched) includeEl.value = prev.include.join("; ");
+  };
+  const setRoot = (path, label = "") => {
+    root = path;
     pathEl.textContent = root;
     pathEl.classList.remove("empty");
     const name = m.querySelector('input[name="name"]');
-    if (name && !name.value.trim()) name.value = picked.label || picked.name;
+    if (name && !name.value.trim() && label) name.value = label;
+    m.querySelector("[data-check]").innerHTML = "";
+    loadHint();
+  };
+  includeEl.addEventListener("input", () => (includeEl.dataset.touched = "1"));
+  m.addEventListener("click", (e) => {
+    const use = e.target.closest("[data-use]");
+    if (use) setRoot(use.dataset.use);
   });
+  m.querySelector("[data-pick]").addEventListener("click", async () => {
+    const picked = await pickFolder(root);
+    if (picked) setRoot(picked.path, picked.label || picked.name);
+  });
+  loadHint();
   m.querySelector("[data-submit]").addEventListener("click", () =>
     submitting(m, async () => {
       const req = {
@@ -309,6 +345,49 @@ function gameForm({ mode, game }) {
   m.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && e.target.tagName === "INPUT") m.querySelector("[data-submit]").click();
   });
+}
+
+const osName = (os) => ({ windows: "Windows", linux: "Linux", android: "Android" })[os] || os || "";
+// Proton prefixes are long; the game's AppData inside them is what matters.
+const shortPath = (p) =>
+  String(p || "").replace(/^.*[\\/]steamapps[\\/]compatdata[\\/](\d+)[\\/]pfx[\\/]drive_c[\\/]users[\\/]steamuser/, "[Proton $1]");
+
+function hintBox(h) {
+  const devices = h.devices.slice(0, 2).map((d) => `
+    <div class="hint-dev">
+      <div class="hint-head">${icon(deviceIcon(d.device))}<span>Na zařízení <strong>${esc(d.device)}</strong>${d.os ? ` · ${esc(osName(d.os))}` : ""}</span>
+        ${d.local ? `<button class="btn small" type="button" data-use="${esc(d.local)}">Použít stejnou</button>` : ""}</div>
+      <code class="hint-path">${esc(shortPath(d.root))}</code>
+      ${d.include?.length ? `<small>Filtr: ${esc(d.include.join("; "))}</small>` : ""}
+    </div>`).join("");
+  const sample = h.sample.length ? `, např. <code>${h.sample.map(esc).join("</code>, <code>")}</code>` : "";
+  const contents = h.files ? `<small>V cloudu: ${files(h.files)}${sample}</small>` : "";
+  return devices + contents;
+}
+
+// relPath names a suggested folder relative to the chosen one.
+function relPath(suggest, root) {
+  const norm = (p) => p.replace(/[\\/]+$/, "");
+  const s = norm(suggest), r = norm(root);
+  if (s.toLowerCase().startsWith(r.toLowerCase()) && /[\\/]/.test(s[r.length] || "")) return s.slice(r.length + 1);
+  return s.split(/[\\/]/).pop() || s;
+}
+
+function checkLine(c, root) {
+  if (!c) return "";
+  const use = (p) => `<button class="btn small" type="button" data-use="${esc(p)}">Použít</button>`;
+  switch (c.status) {
+    case "ok":
+      return `<div class="check ok">${icon("check")}<span>Složka odpovídá cloudu (shodných souborů: ${c.matched}).</span></div>`;
+    case "empty":
+      return `<div class="check">${icon("cloud")}<span>Složka je prázdná, naplní se z cloudu.</span></div>`;
+    case "deeper":
+    case "higher":
+      return `<div class="check warn">${icon("alert")}<span>Soubory z cloudu jsou ${c.status === "deeper" ? "v podsložce" : "v nadřazené složce"} <code>${esc(relPath(c.suggest, root))}</code></span>${use(c.suggest)}</div>`;
+    case "other":
+      return `<div class="check warn">${icon("alert")}<span>V této složce nejsou soubory z cloudu. Zkontroluj, že je správná.</span></div>`;
+  }
+  return "";
 }
 
 // ---------- folder picker ----------

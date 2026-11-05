@@ -54,6 +54,9 @@ func cmdRun(args []string) error {
 		return err
 	}
 	defer closeLog()
+	if err := platform.RegisterNotifications(); err != nil {
+		logger.Printf("notifications: %v", err)
+	}
 
 	token, err := sessionToken(configDir)
 	if err != nil {

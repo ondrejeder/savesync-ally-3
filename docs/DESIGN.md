@@ -44,8 +44,10 @@ server ho vymění za HttpOnly cookie. Kontroluje se i hlavička `Host` (ochrana
 - Struktura:
   ```
   SaveSync Ally 3/
-    <gameId>/game.json        název, zařízení a čas poslední změny
-    <gameId>/files/...        save soubory (relativní cesty vůči kořeni hry)
+    <hra>/                    složka hry: název = název hry; appProperties = kdo a kdy nahrál
+                              naposledy; popis (description) = JSON s cestou každého zařízení
+    <hra>/<soubory>           save soubory naplocho, relativní cesta v appProperties.path
+    <hra>/.versions/          verze v cloudu (zip snímky)
     .app/latest.json          verze + sha256 pro self-update
     .app/savesync-windows-amd64.exe
     .app/savesync-linux-amd64
@@ -107,9 +109,21 @@ restartovat.
 - Obnova: lokální zálohu aktuálního stavu → přesné rozbalení verze (smaže i soubory, které
   ve verzi nejsou) → nahrání jako nová aktuální verze.
 
+## Nastavení hry na dalším zařízení
+
+- Každé zařízení po úspěšné synchronizaci zapíše do popisu herní složky na Drive svůj záznam:
+  cestu (domovská složka zkrácená na `~`), filtr, OS a čas. Zapisuje se jen při změně.
+- Dialog „Nastavit na tomto zařízení“ (`GET /api/games/{id}/hint`) ukáže cesty ostatních zařízení,
+  počet souborů v cloudu a dva nejhlubší příklady relativních cest. Na stejném OS nabídne
+  „Použít stejnou“, pokud cesta existuje i tady. Filtr se předvyplní.
+- Po výběru složky se lokálně porovná s cloudem (jen existence souborů): `ok`, `empty`
+  (naplní se z cloudu), `deeper`/`higher` (soubory jsou v podsložce / nadřazené složce →
+  tlačítko „Použít“) nebo `other` (nic společného). Nic se při tom nemění.
+
 ## Notifikace
 
-`platform.Notify`: Windows toast (přes PowerShell), Linux `notify-send`/`gdbus`. Konflikt,
+`platform.Notify`: Windows toast pod vlastním AUMID `SaveSyncAlly3` (název a ikona registrované
+v `HKCU\Software\Classes\AppUserModelId` při každém startu daemonu), Linux `notify-send`/`gdbus`. Konflikt,
 pojistka, stažení z jiného zařízení, smazání hry z cloudu, vypršelé přihlášení; max. 1 za
 10 min pro stejnou událost a hru.
 

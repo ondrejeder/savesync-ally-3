@@ -40,6 +40,30 @@ type GameFolder struct {
 	Name      string
 	UpdatedBy string    // device name of the last upload
 	UpdatedAt time.Time // time of the last upload
+	// Devices: where each device keeps this game's saves (from the folder
+	// description), so a new device can see how the others set it up.
+	Devices map[string]DevicePath
+}
+
+// DevicePath is one device's setup of a game.
+type DevicePath struct {
+	Root    string    `json:"root"` // home directory shortened to ~
+	Include []string  `json:"include,omitempty"`
+	OS      string    `json:"os"`
+	Updated time.Time `json:"updated"`
+}
+
+// gameMeta is stored as JSON in the game folder's description.
+type gameMeta struct {
+	Devices map[string]DevicePath `json:"devices"`
+}
+
+func parseGameMeta(desc string) map[string]DevicePath {
+	var m gameMeta
+	if desc == "" || json.Unmarshal([]byte(desc), &m) != nil {
+		return nil
+	}
+	return m.Devices
 }
 
 // APIError is a non-2xx response from Drive.
@@ -60,6 +84,7 @@ type file struct {
 	MD5           string            `json:"md5Checksum"`
 	Size          string            `json:"size"`
 	ModifiedTime  string            `json:"modifiedTime"`
+	Description   string            `json:"description"`
 	Trashed       bool              `json:"trashed"`
 	Parents       []string          `json:"parents"`
 	AppProperties map[string]string `json:"appProperties"`
@@ -125,6 +150,29 @@ func (c *Client) TouchGame(ctx context.Context, gameID, device string) error {
 		"updatedAt": time.Now().UTC().Format(time.RFC3339),
 	}}
 	return c.patchJSON(ctx, apiBase+"/files/"+url.PathEscape(gameID), meta)
+}
+
+// SetDevicePath records this device's setup of a game. It re-reads the
+// description first so entries written by other devices are kept, and
+// returns the merged map.
+func (c *Client) SetDevicePath(ctx context.Context, gameID, device string, p DevicePath) (map[string]DevicePath, error) {
+	var f file
+	if err := c.getJSON(ctx, apiBase+"/files/"+url.PathEscape(gameID)+"?fields=description", &f); err != nil {
+		return nil, err
+	}
+	devices := parseGameMeta(f.Description)
+	if devices == nil {
+		devices = map[string]DevicePath{}
+	}
+	devices[device] = p
+	desc, err := json.Marshal(gameMeta{Devices: devices})
+	if err != nil {
+		return nil, err
+	}
+	if err := c.patchJSON(ctx, apiBase+"/files/"+url.PathEscape(gameID), map[string]any{"description": string(desc)}); err != nil {
+		return nil, err
+	}
+	return devices, nil
 }
 
 // RenameGame changes the display name of a game folder.
@@ -249,7 +297,7 @@ func (c *Client) list(ctx context.Context, q string) ([]file, error) {
 		v.Set("q", q)
 		v.Set("spaces", "drive")
 		v.Set("pageSize", "1000")
-		v.Set("fields", "nextPageToken,files(id,name,mimeType,md5Checksum,size,modifiedTime,appProperties)")
+		v.Set("fields", "nextPageToken,files(id,name,mimeType,md5Checksum,size,modifiedTime,description,appProperties)")
 		if pageToken != "" {
 			v.Set("pageToken", pageToken)
 		}
@@ -275,7 +323,7 @@ func (c *Client) createFolder(ctx context.Context, name, parent string, props ma
 	}
 	body, _ := json.Marshal(meta)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		apiBase+"/files?fields=id,name,modifiedTime,appProperties", bytes.NewReader(body))
+		apiBase+"/files?fields=id,name,modifiedTime,description,appProperties", bytes.NewReader(body))
 	if err != nil {
 		return file{}, err
 	}
@@ -383,7 +431,7 @@ func readError(resp *http.Response) *APIError {
 }
 
 func gameFromFile(f file) GameFolder {
-	g := GameFolder{ID: f.ID, Name: f.Name, UpdatedBy: f.AppProperties["updatedBy"]}
+	g := GameFolder{ID: f.ID, Name: f.Name, UpdatedBy: f.AppProperties["updatedBy"], Devices: parseGameMeta(f.Description)}
 	if t, err := time.Parse(time.RFC3339, f.AppProperties["updatedAt"]); err == nil {
 		g.UpdatedAt = t
 	} else if t, err := time.Parse(time.RFC3339, f.ModifiedTime); err == nil {

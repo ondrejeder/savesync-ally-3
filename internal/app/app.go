@@ -61,6 +61,7 @@ type App struct {
 	queued       map[string]bool
 	versionDirs  map[string]string // gameID -> versions folder ID
 	notified     map[string]time.Time
+	hints        hintCache
 
 	update        *update.Manifest // newer release, if any
 	updateChecked time.Time

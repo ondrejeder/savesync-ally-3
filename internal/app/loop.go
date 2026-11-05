@@ -365,6 +365,7 @@ func (a *App) syncGame(ctx context.Context, j job) {
 			}
 			a.maybeVersion(ctx, game, next)
 		}
+		a.publishPath(ctx, game)
 		a.setStatus(game.ID, func(s *gameStatus) {
 			s.status, s.message, s.progress, s.conflict, s.guarded = web.StatusSynced, "", nil, nil, false
 			s.lastSync = time.Now()

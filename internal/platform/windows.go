@@ -105,6 +105,7 @@ func UninstallIntegration() error {
 	for _, link := range shortcutPaths() {
 		_ = os.Remove(link)
 	}
+	_ = registry.DeleteKey(registry.CURRENT_USER, appIDKey)
 	return nil
 }
 
@@ -167,6 +168,43 @@ func openFolder(path string) error {
 	return cmd.Start()
 }
 
+// notifyAppID is the toast sender. It stays PowerShell's ID until our own
+// ID is registered, so notifications work even if registration fails.
+var notifyAppID = `{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell1.0\powershell.exe`
+
+const appID = "SaveSyncAlly3"
+const appIDKey = `Software\Classes\AppUserModelId\` + appID
+
+// RegisterNotifications registers the app's own notification sender, so
+// toasts show "SaveSync Ally" with its icon instead of Windows PowerShell.
+// It runs at every daemon start, so updated installs get it without reinstalling.
+func RegisterNotifications() error {
+	data, err := DataDir()
+	if err != nil {
+		return err
+	}
+	icon := filepath.Join(data, "icon.png")
+	if err := os.MkdirAll(data, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(icon, IconPNG(256), 0o644); err != nil {
+		return err
+	}
+	k, _, err := registry.CreateKey(registry.CURRENT_USER, appIDKey, registry.SET_VALUE)
+	if err != nil {
+		return err
+	}
+	defer k.Close()
+	if err := k.SetStringValue("DisplayName", "SaveSync Ally"); err != nil {
+		return err
+	}
+	if err := k.SetExpandStringValue("IconUri", icon); err != nil {
+		return err
+	}
+	notifyAppID = appID
+	return nil
+}
+
 // Notify shows a Windows toast notification.
 func Notify(title, body string) error {
 	q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
@@ -175,7 +213,7 @@ $x = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Wi
 $t = $x.GetElementsByTagName('text')
 $t.Item(0).AppendChild($x.CreateTextNode(` + q(title) + `)) > $null
 $t.Item(1).AppendChild($x.CreateTextNode(` + q(body) + `)) > $null
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe').Show([Windows.UI.Notifications.ToastNotification]::new($x))`
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier(` + q(notifyAppID) + `).Show([Windows.UI.Notifications.ToastNotification]::new($x))`
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
 	return cmd.Start()

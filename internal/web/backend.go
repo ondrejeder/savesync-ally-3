@@ -21,6 +21,35 @@ type Backend interface {
 	Versions(id string) ([]Version, error)
 	RestoreVersion(id, versionID string) (string, error)
 	SaveSettings(s Settings) (string, error)
+	Hint(id, root string) (Hint, error)
+}
+
+// Hint helps set up a cloud game on a new device: how the other devices
+// have it set up, what the cloud contains and whether root fits.
+type Hint struct {
+	Devices []DeviceHint `json:"devices"`
+	Files   int          `json:"files"`
+	Sample  []string     `json:"sample"`
+	Check   *PathCheck   `json:"check,omitempty"`
+}
+
+type DeviceHint struct {
+	Device  string   `json:"device"`
+	Root    string   `json:"root"`
+	Include []string `json:"include,omitempty"`
+	OS      string   `json:"os"`
+	Updated string   `json:"updated"`
+	// Local is the same path on this device, when it exists here.
+	Local string `json:"local,omitempty"`
+}
+
+// PathCheck compares a chosen folder with the cloud file list.
+type PathCheck struct {
+	// ok: cloud files found in the folder; empty: nothing there yet;
+	// deeper / higher: the files are in Suggest; other: unrelated files.
+	Status  string `json:"status"`
+	Matched int    `json:"matched"`
+	Suggest string `json:"suggest,omitempty"`
 }
 
 // Version is a cloud snapshot of a whole game.
@@ -77,6 +106,16 @@ func (s *Server) routes(mux *http.ServeMux) {
 	})))
 	mux.Handle("POST /api/games", s.auth(jsonHandler(func(req GameRequest, _ *http.Request) (any, error) {
 		return message(s.Backend.AddGame(req))
+	})))
+	mux.Handle("GET /api/games/{id}/hint", s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hint, err := s.Backend.Hint(r.PathValue("id"), r.URL.Query().Get("root"))
+		if hint.Devices == nil {
+			hint.Devices = []DeviceHint{}
+		}
+		if hint.Sample == nil {
+			hint.Sample = []string{}
+		}
+		reply(w, hint, err)
 	})))
 	mux.Handle("POST /api/games/{id}/setup", s.auth(jsonHandler(func(req GameRequest, r *http.Request) (any, error) {
 		return message(s.Backend.SetupGame(r.PathValue("id"), req))
@@ -150,3 +189,4 @@ func (Unimplemented) RestoreBackup(string, string) (string, error)  { return "",
 func (Unimplemented) Versions(string) ([]Version, error)            { return nil, ErrNotImplemented }
 func (Unimplemented) RestoreVersion(string, string) (string, error) { return "", ErrNotImplemented }
 func (Unimplemented) SaveSettings(Settings) (string, error)         { return "", ErrNotImplemented }
+func (Unimplemented) Hint(string, string) (Hint, error)             { return Hint{}, ErrNotImplemented }
