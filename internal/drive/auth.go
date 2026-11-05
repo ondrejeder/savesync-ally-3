@@ -29,8 +29,8 @@ var (
 
 const (
 	scope = "https://www.googleapis.com/auth/drive.file"
-	// The loopback redirect stays on the port used by v2 so the existing
-	// OAuth client works whether it is a "Desktop" or a "Web" client.
+	// Prefer the legacy port, but Desktop OAuth clients also allow a random
+	// loopback port when another application is already listening here.
 	redirectAddr = "127.0.0.1:3000"
 )
 
@@ -167,22 +167,28 @@ func (a *Auth) BeginLogin() (string, error) {
 		a.mu.Unlock()
 		return p.url, nil
 	}
-	a.mu.Unlock()
-
 	ln, err := net.Listen("tcp", redirectAddr)
 	if err != nil {
-		return "", fmt.Errorf("port %s je obsazený (neběží zrovna přihlášení ve v2?): %w", redirectAddr, err)
+		ln, err = net.Listen("tcp", "127.0.0.1:0")
 	}
+	if err != nil {
+		a.mu.Unlock()
+		return "", fmt.Errorf("nelze spustit místní server pro přihlášení: %w", err)
+	}
+	// Keep the redirect identical for authorization and token exchange, without
+	// changing the shared configuration used to refresh existing tokens.
+	cfg := *a.cfg
+	cfg.RedirectURL = "http://" + ln.Addr().String()
 	state := randomString()
 	verifier := oauth2.GenerateVerifier()
-	authURL := a.cfg.AuthCodeURL(state,
+	authURL := cfg.AuthCodeURL(state,
 		oauth2.AccessTypeOffline,
 		oauth2.ApprovalForce,
 		oauth2.S256ChallengeOption(verifier),
 	)
 	expires := time.Now().Add(10 * time.Minute)
-	a.mu.Lock()
-	a.pending = &pendingLogin{url: authURL, expires: expires}
+	pending := &pendingLogin{url: authURL, expires: expires}
+	a.pending = pending
 	a.mu.Unlock()
 
 	ctx, cancel := context.WithDeadline(context.Background(), expires)
@@ -199,7 +205,7 @@ func (a *Auth) BeginLogin() (string, error) {
 			cancel()
 			return
 		}
-		tok, err := a.cfg.Exchange(r.Context(), q.Get("code"), oauth2.VerifierOption(verifier))
+		tok, err := cfg.Exchange(r.Context(), q.Get("code"), oauth2.VerifierOption(verifier))
 		if err != nil {
 			fmt.Fprint(w, callbackPage("Přihlášení se nepovedlo", err.Error()))
 			cancel()
@@ -222,7 +228,9 @@ func (a *Auth) BeginLogin() (string, error) {
 		defer c()
 		_ = srv.Shutdown(shutdownCtx)
 		a.mu.Lock()
-		a.pending = nil
+		if a.pending == pending {
+			a.pending = nil
+		}
 		a.mu.Unlock()
 	}()
 	return authURL, nil

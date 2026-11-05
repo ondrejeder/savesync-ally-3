@@ -35,7 +35,7 @@ server ho vymění za HttpOnly cookie. Kontroluje se i hlavička `Host` (ochrana
 ## Okno aplikace
 
 - Windows: Edge (vždy přítomen), fallback Chrome, poslední fallback výchozí prohlížeč.
-- Linux: Chromium/Chrome/Brave/Edge (PATH i Flatpak), fallback Firefox `--kiosk`, poslední `xdg-open`.
+- Linux: Chromium/Chrome/Brave/Edge (PATH i Flatpak), fallback Firefox `--new-window`, poslední `xdg-open`.
 - Vlastní profil prohlížeče (`--user-data-dir`), takže okno je oddělené od běžného prohlížení.
 
 ## Google Drive
@@ -118,7 +118,7 @@ pojistka, stažení z jiného zařízení, smazání hry z cloudu, vypršelé p�
 1. `scripts\release.ps1 -Version X.Y.Z -Notes "…"` (čistý repozitář): vytvoří tag `vX.Y.Z`, sestaví
    binárky a `savesync publish` je nahraje do `SaveSync Ally 3/.app/` (stejný název = stejné ID souboru).
    `latest.json` jde až nakonec: verze, poznámky a pro každou platformu (`windows-amd64`,
-   `linux-amd64`, později `linux-arm64`) ID souboru, velikost a SHA-256.
+   `linux-amd64`, `linux-arm64`) ID souboru, velikost a SHA-256.
 2. Klienti čtou manifest při plné kontrole, nejvýš 1× za 6 h, nebo ručně v Nastavení; novější
    verze → lišta „Nainstalovat“ a jednorázová notifikace.
 3. Instalace (jen u nainstalované binárky): stažení → kontrola velikosti a SHA-256 → stará
@@ -144,8 +144,9 @@ pojistka, stažení z jiného zařízení, smazání hry z cloudu, vypršelé p�
 5. ✅ Self-update a publish.
 6. Migrace z v2 (import seznamu her a cest), test na Ally.
 
-## Později: Linux ARM64 a Android (AYN Odin 3)
+## Linux ARM64 a pozdější Android (AYN Odin 3)
 
-- Linux ARM64: další cíl v `build.ps1`, self-update vybírá binárku podle architektury.
+- Linux ARM64: cíl v `build.ps1`, self-update vybírá binárku podle architektury.
+  Sestavení samo nepotvrzuje kompatibilitu konkrétního SteamOS portu; ověřovací postup je v `DEPLOYMENT.md`.
 - Android: lehké APK (Kotlin foreground service s Go jádrem + WebView na lokální UI),
   notifikace přes Android, emulátory ukládají do nastavitelných složek ve sdíleném úložišti.

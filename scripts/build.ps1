@@ -1,4 +1,4 @@
-# Builds savesync for Windows and Linux (amd64) into dist/.
+# Builds savesync for Windows amd64 and Linux amd64/arm64 into dist/.
 # Pure Go (CGO disabled), so no MSYS2/WSL is needed.
 param(
     [string]$Version = ""
@@ -34,20 +34,34 @@ if (Test-Path $EnvFile) {
 }
 
 New-Item -ItemType Directory -Force -Path "dist" | Out-Null
-$env:CGO_ENABLED = "0"
-$env:GOARCH = "amd64"
-
 $targets = @(
-    @{ os = "windows"; out = "dist\savesync-windows-amd64.exe"; extra = @("-H=windowsgui") },
-    @{ os = "linux";   out = "dist\savesync-linux-amd64";       extra = @() }
+    @{ os = "windows"; arch = "amd64"; out = "dist\savesync-windows-amd64.exe"; extra = @("-H=windowsgui") },
+    @{ os = "linux"; arch = "amd64"; out = "dist\savesync-linux-amd64"; extra = @() },
+    @{ os = "linux"; arch = "arm64"; out = "dist\savesync-linux-arm64"; extra = @() }
 )
-foreach ($t in $targets) {
-    $env:GOOS = $t.os
-    $flags = ($Ldflags + $t.extra) -join " "
-    & $Go build -trimpath -ldflags $flags -o $t.out ./cmd/savesync
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    Write-Host "built $($t.out)"
+$savedEnv = @{}
+foreach ($name in @("GOOS", "GOARCH", "CGO_ENABLED")) {
+    $savedEnv[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
 }
-Remove-Item Env:GOOS, Env:GOARCH, Env:CGO_ENABLED
+try {
+    $env:CGO_ENABLED = "0"
+    foreach ($t in $targets) {
+        $env:GOOS = $t.os
+        $env:GOARCH = $t.arch
+        $flags = ($Ldflags + $t.extra) -join " "
+        & $Go build -trimpath -ldflags $flags -o $t.out ./cmd/savesync
+        if ($LASTEXITCODE -ne 0) { throw "Build pro $($t.os)-$($t.arch) selhal (kod $LASTEXITCODE)." }
+        Write-Host "built $($t.out)"
+    }
+    $checksums = foreach ($t in $targets) {
+        $hash = (Get-FileHash -LiteralPath $t.out -Algorithm SHA256).Hash.ToLowerInvariant()
+        "$hash  $(Split-Path -Leaf $t.out)"
+    }
+    $checksums | Set-Content -LiteralPath "dist\SHA256SUMS" -Encoding ascii
+} finally {
+    foreach ($name in $savedEnv.Keys) {
+        [Environment]::SetEnvironmentVariable($name, $savedEnv[$name], "Process")
+    }
+}
 
 Write-Host "SaveSync Ally $Version"

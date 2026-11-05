@@ -17,7 +17,7 @@ type browser struct {
 
 func (b browser) args(url string) []string {
 	if b.firefox {
-		return []string{"--new-instance", "--profile", b.profile, "--kiosk", url}
+		return []string{"--new-instance", "--profile", b.profile, "--new-window", url}
 	}
 	return []string{
 		"--app=" + url,

@@ -20,8 +20,19 @@ if ($existing) { throw "Tag v$Version už existuje." }
 git tag -a "v$Version" -m "SaveSync Ally $Version"
 if ($LASTEXITCODE -ne 0) { throw "git tag selhal." }
 
-& (Join-Path $PSScriptRoot "build.ps1") -Version $Version
-if ($LASTEXITCODE -ne 0) { git tag -d "v$Version" | Out-Null; throw "Build selhal." }
+try {
+    & (Join-Path $PSScriptRoot "build.ps1") -Version $Version
+    if ($LASTEXITCODE -ne 0) { throw "Build selhal." }
+    foreach ($name in @("savesync-windows-amd64.exe", "savesync-linux-amd64", "savesync-linux-arm64", "SHA256SUMS")) {
+        $artifact = Join-Path $Root "dist\$name"
+        if (-not (Test-Path -LiteralPath $artifact -PathType Leaf) -or (Get-Item -LiteralPath $artifact).Length -eq 0) {
+            throw "Chybi vystup buildu: $name"
+        }
+    }
+} catch {
+    git tag -d "v$Version" | Out-Null
+    throw
+}
 
 # The Windows binary is a GUI-subsystem program: wait for it explicitly.
 $publishArgs = @("publish")
