@@ -274,7 +274,18 @@ func (c *Client) uploadResumable(ctx context.Context, method, target string, met
 
 // Download streams a file's content into w.
 func (c *Client) Download(ctx context.Context, id string, w io.Writer) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+"/files/"+url.PathEscape(id)+"?alt=media", nil)
+	return c.download(ctx, id, "", w)
+}
+
+// DownloadOwn downloads a file the user owns even when Drive's scanner has
+// flagged it (it sometimes flags unsigned .exe files as abusive). Only for
+// files whose checksum is verified afterwards, i.e. app updates.
+func (c *Client) DownloadOwn(ctx context.Context, id string, w io.Writer) error {
+	return c.download(ctx, id, "&acknowledgeAbuse=true", w)
+}
+
+func (c *Client) download(ctx context.Context, id, extra string, w io.Writer) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+"/files/"+url.PathEscape(id)+"?alt=media"+extra, nil)
 	if err != nil {
 		return err
 	}

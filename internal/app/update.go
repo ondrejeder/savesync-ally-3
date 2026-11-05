@@ -128,7 +128,7 @@ func (a *App) doInstallUpdate() error {
 	defer os.Remove(tmp)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	err = a.cloud.Download(ctx, asset.ID, f)
+	err = a.cloud.DownloadOwn(ctx, asset.ID, f) // checked against the manifest SHA-256 below
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
