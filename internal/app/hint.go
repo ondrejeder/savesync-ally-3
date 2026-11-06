@@ -109,7 +109,7 @@ func (a *App) Hint(id, root string) (web.Hint, error) {
 	}
 	hint.Files = len(rels)
 	hint.Sample = sample(rels, 2)
-	if root = strings.TrimSpace(root); root != "" && len(rels) > 0 {
+	if root = strings.TrimSpace(root); root != "" {
 		hint.Check = checkPath(filepath.Clean(root), rels)
 	}
 	return hint, nil

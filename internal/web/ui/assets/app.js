@@ -261,7 +261,7 @@ function gameForm({ mode, game }) {
   const submit = { add: "Přidat a synchronizovat", setup: "Nastavit", edit: "Uložit" };
   const intro = {
     add: "Vyber složku, kde hra ukládá pozice. Celá složka se bude synchronizovat přes Google Drive.",
-    setup: "Vyber složku, kde tahle hra ukládá pozice na tomto zařízení. Prázdná složka se naplní z cloudu; když v ní už savy jsou a liší se, zeptám se, kterou verzi ponechat.",
+    setup: "Vyber složku, kde tahle hra ukládá pozice na tomto zařízení. Prázdná složka se naplní z cloudu; když v ní už nějaké soubory jsou, vybereš, kterou verzi použít.",
     edit: "Po změně složky nebo filtru se při další synchronizaci obě strany znovu porovnají.",
   };
   const m = openModal({
@@ -277,6 +277,10 @@ function gameForm({ mode, game }) {
         </div>
         <div data-check></div>
       </div>
+      ${mode === "setup" ? `<div class="field keep" data-keep hidden><span>Ve složce už jsou soubory. Kterou verzi použít?</span>
+        <label class="choice"><input type="radio" name="keep" value="cloud"><span><strong>Z cloudu</strong><small>Obsah složky se zazálohuje a nahradí přesnou kopií cloudu.</small></span></label>
+        <label class="choice"><input type="radio" name="keep" value="local"><span><strong>Z tohoto zařízení</strong><small>Cloud se nahradí obsahem této složky. Ostatní zařízení si ho stáhnou (své soubory si předtím zazálohují).</small></span></label>
+      </div>` : ""}
       <label class="field"><span>Filtr souborů <em>(nepovinné)</em></span>
         <input name="include" value="${esc((game?.include || []).join("; "))}" placeholder="*.sav; profile*.dat" autocomplete="off">
         <small>Prázdné znamená celou složku. Více vzorů odděl středníkem.</small></label>
@@ -304,7 +308,10 @@ function gameForm({ mode, game }) {
     box.innerHTML = hintBox(h);
     box.hidden = !box.innerHTML.trim();
     const checkEl = m.querySelector("[data-check]");
-    checkEl.innerHTML = checkLine(h.check, root);
+    checkEl.innerHTML = h.files ? checkLine(h.check, root) : "";
+    // Files on both sides: the user picks which version wins (never merged).
+    const keepEl = m.querySelector("[data-keep]");
+    keepEl.hidden = !(h.files && h.check && h.check.status !== "empty");
     if (h.check && h.check.status !== "ok") checkEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
     const prev = h.devices.find((d) => d.include?.length);
     if (prev && !includeEl.value.trim() && !includeEl.dataset.touched) includeEl.value = prev.include.join("; ");
@@ -316,9 +323,15 @@ function gameForm({ mode, game }) {
     const name = m.querySelector('input[name="name"]');
     if (name && !name.value.trim() && label) name.value = label;
     m.querySelector("[data-check]").innerHTML = "";
+    const keepEl = m.querySelector("[data-keep]");
+    if (keepEl) {
+      keepEl.hidden = true;
+      keepEl.querySelectorAll("input").forEach((i) => (i.checked = false));
+    }
     loadHint();
   };
   includeEl.addEventListener("input", () => (includeEl.dataset.touched = "1"));
+  m.querySelector("[data-keep]")?.addEventListener("change", () => setError(m, ""));
   m.addEventListener("click", (e) => {
     const use = e.target.closest("[data-use]");
     if (use) setRoot(use.dataset.use);
@@ -335,6 +348,11 @@ function gameForm({ mode, game }) {
         root,
         include: m.querySelector('input[name="include"]').value.split(/[;,]/),
       };
+      const keepEl = m.querySelector("[data-keep]");
+      if (keepEl && !keepEl.hidden) {
+        req.keep = keepEl.querySelector("input:checked")?.value || "";
+        if (!req.keep) throw new Error("Vyber, kterou verzi použít.");
+      }
       const id = encodeURIComponent(game?.id || "");
       const path = mode === "add" ? "/api/games" : mode === "setup" ? `/api/games/${id}/setup` : `/api/games/${id}`;
       const data = await api("POST", path, req);
@@ -479,6 +497,8 @@ function gameMenu(g) {
       ${local ? item("open-folder", "folder", "Otevřít složku se savy") : ""}
       ${local ? item("versions", "history", "Historie verzí v cloudu") : ""}
       ${local ? item("backups", "file", "Lokální zálohy") : ""}
+      ${local ? item("force-local", "up", "Nahrát stav tohoto zařízení do cloudu") : ""}
+      ${local ? item("force-cloud", "down", "Přepsat toto zařízení stavem z cloudu") : ""}
       ${local ? item("remove", "unlink", "Přestat synchronizovat na tomto zařízení") : ""}
       ${item("delete-cloud", "trash", "Smazat z cloudu", "danger")}
     </div>`,
@@ -647,6 +667,24 @@ async function handle(kind, id) {
       });
       if (!ok) return;
       try { toast((await api("DELETE", `/api/games/${encodeURIComponent(id)}`)).message); } catch (e) { toast(e.message); }
+      return;
+    }
+    case "force-local": {
+      const ok = await confirmModal({
+        title: "Nahrát stav tohoto zařízení?",
+        text: `Cloud se u hry ${esc(g?.name)} nahradí přesnou kopií složky na tomto zařízení. Ostatní zařízení si ji stáhnou a své dosavadní soubory si předtím uloží do lokální zálohy.`,
+        confirm: "Nahrát do cloudu",
+      });
+      if (ok) action("keep-local", id);
+      return;
+    }
+    case "force-cloud": {
+      const ok = await confirmModal({
+        title: "Přepsat toto zařízení?",
+        text: `Složka hry ${esc(g?.name)} na tomto zařízení se nahradí přesnou kopií cloudu. Současné soubory se nejdřív uloží do lokální zálohy.`,
+        confirm: "Přepsat z cloudu",
+      });
+      if (ok) action("keep-cloud", id);
       return;
     }
     case "delete-cloud": {

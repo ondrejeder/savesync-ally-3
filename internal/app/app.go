@@ -256,7 +256,17 @@ func (a *App) Action(kind, gameID string) (string, error) {
 			side = engine.KeepCloud
 		}
 		a.enqueue(job{gameID: gameID, keep: side})
-		return "Řeším konflikt…", nil
+		a.mu.Lock()
+		conflict := a.games[gameID] != nil && a.games[gameID].conflict != nil
+		a.mu.Unlock()
+		switch {
+		case conflict:
+			return "Řeším konflikt…", nil
+		case side == engine.KeepLocal:
+			return "Nahrávám stav tohoto zařízení do cloudu…", nil
+		default:
+			return "Zálohuji a stahuji stav z cloudu…", nil
+		}
 	case "update-check":
 		go func() {
 			if err := a.checkUpdate(context.Background(), true); err != nil {

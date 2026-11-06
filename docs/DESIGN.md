@@ -119,6 +119,12 @@ restartovat.
 - Po výběru složky se lokálně porovná s cloudem (jen existence souborů): `ok`, `empty`
   (naplní se z cloudu), `deeper`/`higher` (soubory jsou v podsložce / nadřazené složce →
   tlačítko „Použít“) nebo `other` (nic společného). Nic se při tom nemění.
+- Když vybraná složka není prázdná a v cloudu soubory jsou, uživatel musí zvolit, kterou verzi
+  použít („Z cloudu“ / „Z tohoto zařízení“). Savy se nikdy neslučují po souborech. Volba se provede
+  jako řešení konfliktu (`ResolvePlan`): poražená strana se stane přesnou kopií vítězné, místní
+  soubory se před přepsáním nebo smazáním zazálohují. Server volbu vyžaduje i bez UI.
+- Stejné vynucení je v menu hry: „Nahrát stav tohoto zařízení do cloudu“ / „Přepsat toto zařízení
+  stavem z cloudu“ (akce `keep-local` / `keep-cloud`, s potvrzením).
 
 ## Notifikace
 

@@ -220,6 +220,16 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .check span { flex: 1; min-width: 0; }
 .check.ok { color: var(--success-text); }
 .check.warn { background: var(--warning-bg); color: var(--warning-text); }
+.keep[hidden] { display: none; }
+.choice {
+  display: flex; gap: 12px; align-items: flex-start; padding: 12px; cursor: pointer;
+  background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--radius);
+}
+.choice:has(input:checked) { border-color: var(--accent); background: var(--accent-bg); }
+.choice input { flex: none; width: 20px; height: 20px; min-height: 0; padding: 0; margin: 2px 0 0; accent-color: var(--accent); }
+.choice span { display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
+.choice strong { font-weight: 600; }
+.choice small { color: var(--muted); font-size: 12.5px; }
 .form-error { margin: 0; padding: 10px 12px; border-radius: var(--radius); background: var(--danger-bg); color: var(--danger-text); font-size: 14px; }
 .form-error[hidden], .toast[hidden] { display: none; }
 

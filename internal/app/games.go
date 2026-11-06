@@ -119,6 +119,11 @@ func cleanRequest(req web.GameRequest, needName bool) (web.GameRequest, error) {
 	return req, nil
 }
 
+func hasEntries(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	return err == nil && len(entries) > 0
+}
+
 // isTooBroad blocks folders that would sync far more than one game.
 func isTooBroad(root string) bool {
 	if filepath.Dir(root) == root {
@@ -225,12 +230,35 @@ func (a *App) SetupGame(id string, req web.GameRequest) (string, error) {
 	if name == "" {
 		return "", errors.New("Hra v cloudu nebyla nalezena.")
 	}
+	var keep engine.Side
+	switch req.Keep {
+	case "local":
+		keep = engine.KeepLocal
+	case "cloud":
+		keep = engine.KeepCloud
+	case "":
+		// A folder with files next to a non-empty cloud would be merged file
+		// by file; saves belong together, so the user picks a side instead.
+		if hasEntries(req.Root) {
+			if rels, err := a.cloudRels(id); err == nil && len(rels) > 0 {
+				return "", errors.New("Ve složce už jsou soubory. Vyber, kterou verzi použít.")
+			}
+		}
+	default:
+		return "", errors.New("Neplatná volba verze.")
+	}
 	if err := a.store.PutGame(store.Game{ID: id, Name: name, Root: req.Root, Include: req.Include}); err != nil {
 		return "", err
 	}
 	a.updateWatcher()
-	a.enqueue(job{gameID: id})
-	return fmt.Sprintf("%s nastavena. Pokud ve složce už jsou jiné savy, zeptám se, kterou verzi ponechat.", name), nil
+	a.enqueue(job{gameID: id, keep: keep})
+	switch keep {
+	case engine.KeepLocal:
+		return fmt.Sprintf("%s nastavena, nahrávám obsah složky do cloudu…", name), nil
+	case engine.KeepCloud:
+		return fmt.Sprintf("%s nastavena, zálohuji složku a stahuji verzi z cloudu…", name), nil
+	}
+	return fmt.Sprintf("%s nastavena, stahuji savy z cloudu…", name), nil
 }
 
 // EditGame renames a game and/or changes its folder or filter.
