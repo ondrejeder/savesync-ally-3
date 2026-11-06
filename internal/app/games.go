@@ -72,7 +72,8 @@ func (a *App) Browse(path string) (web.Listing, error) {
 var acfName = regexp.MustCompile(`"name"\s+"([^"]+)"`)
 
 // steamGameNames maps compatdata app IDs to game names using the
-// appmanifest_<id>.acf files next to the compatdata folder.
+// appmanifest_<id>.acf files next to the compatdata folder, and the names of
+// non-Steam shortcuts.
 func steamGameNames(dir string) map[string]string {
 	names := map[string]string{}
 	if filepath.Base(dir) != "compatdata" {
@@ -85,6 +86,11 @@ func steamGameNames(dir string) map[string]string {
 			if match := acfName.FindSubmatch(data); match != nil {
 				names[id] = string(match[1])
 			}
+		}
+	}
+	for id, name := range nonSteamNames(dir) {
+		if _, ok := names[id]; !ok {
+			names[id] = name
 		}
 	}
 	return names
@@ -319,8 +325,9 @@ func (a *App) EditGame(id string, req web.GameRequest) (string, error) {
 	}
 	// Saving the form also confirms the folder after a layout change
 	// elsewhere. Replacing the cloud with a differently structured folder
-	// is such a change: the other devices pause the game until they check
-	// their folder, instead of mirroring the new structure into the old one.
+	// is such a change: the other devices follow it when it is a shift of
+	// a level or two, otherwise they pause the game until their folder is
+	// checked, instead of mirroring the new structure into the old one.
 	layout := a.cloudLayout(id)
 	if changed && keep == engine.KeepLocal {
 		if err := a.requireDrive(); err != nil {
@@ -328,17 +335,12 @@ func (a *App) EditGame(id string, req web.GameRequest) (string, error) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		var err error
-		if layout, err = a.cloud.SetLayout(ctx, id, a.store.Config().Device); err != nil {
+		includeChanged := strings.Join(req.Include, "\n") != strings.Join(game.Include, "\n")
+		layout = newLayout(a.store.Config().Device, game.Root, req.Root, includeChanged).String()
+		if err := a.cloud.SetLayout(ctx, id, layout); err != nil {
 			return "", err
 		}
-		a.mu.Lock()
-		for i := range a.cloudGames {
-			if a.cloudGames[i].ID == id {
-				a.cloudGames[i].Layout = layout
-			}
-		}
-		a.mu.Unlock()
+		a.setCloudLayout(id, layout)
 	}
 	game.Name, game.Root, game.Include, game.Layout = req.Name, req.Root, req.Include, layout
 	if err := a.store.PutGame(game); err != nil {

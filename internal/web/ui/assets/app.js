@@ -278,12 +278,13 @@ function gameForm({ mode, game }) {
           <div class="path ${game?.root ? "" : "empty"}" data-path>${esc(game?.root || "Zatím nevybráno")}</div>
           <button class="btn" type="button" data-pick>${icon("folder")}Vybrat složku</button>
         </div>
+        <button class="btn small ghost find-recent" type="button" data-recent>${icon("clock")}Najít podle posledních změn</button>
         <div data-check></div>
       </div>
       ${mode !== "add" ? `<div class="field keep" data-keep hidden><span>Ve složce už jsou soubory. Kterou verzi použít?</span>
         <label class="choice"><input type="radio" name="keep" value="cloud"><span><strong>Z cloudu</strong><small>Obsah složky se zazálohuje a nahradí přesnou kopií cloudu.</small></span></label>
         <label class="choice"><input type="radio" name="keep" value="local"><span><strong>Z tohoto zařízení</strong><small>${mode === "edit"
-          ? "Cloud se nahradí obsahem této složky. Ostatní zařízení tuhle hru pozastaví, dokud u nich složku nezkontroluješ."
+          ? "Cloud se nahradí obsahem této složky. Posun o 1–2 úrovně ostatní zařízení převezmou sama, jinak tě požádají o kontrolu složky."
           : "Cloud se nahradí obsahem této složky. Ostatní zařízení si ho stáhnou (své soubory si předtím zazálohují)."}</small></span></label>
       </div>` : ""}
       <label class="field"><span>Filtr souborů <em>(nepovinné)</em></span>
@@ -357,6 +358,10 @@ function gameForm({ mode, game }) {
     const picked = await pickFolder(root);
     if (picked) setRoot(picked.path, picked.label || picked.name);
   });
+  m.querySelector("[data-recent]").addEventListener("click", async () => {
+    const picked = await findRecent();
+    if (picked) setRoot(picked.path, picked.label || picked.name);
+  });
   loadHint();
   m.querySelector("[data-submit]").addEventListener("click", () =>
     submitting(m, async () => {
@@ -424,6 +429,78 @@ function checkLine(c, root) {
   }
   return "";
 }
+
+// ---------- find by recent changes ----------
+
+// Finds the save folder of a game that was just played: folders in the usual
+// save locations with files changed in the last minutes, newest first.
+function findRecent() {
+  return new Promise((resolve) => {
+    let picked = null;
+    let results = [];
+    const m = openModal({
+      title: "Najít podle posledních změn",
+      body: `
+        <p class="lead">Zahraj hru, ulož pozici a hru ukonči. Pak tu hledej: nahoře budou složky, kde se naposledy změnily soubory.</p>
+        <div class="recent-bar">
+          <label class="field inline"><span>Změněno za posledních</span>
+            <select data-minutes><option value="15">15 minut</option><option value="30" selected>30 minut</option><option value="120">2 hodiny</option><option value="720">12 hodin</option></select>
+          </label>
+          <button class="btn primary" type="button" data-search>${icon("refresh")}Hledat</button>
+        </div>
+        <div data-results></div>`,
+    });
+    m.addEventListener("closed", () => resolve(picked));
+    const out = m.querySelector("[data-results]");
+    const search = async () => {
+      const btn = m.querySelector("[data-search]");
+      btn.disabled = true;
+      out.innerHTML = `<p class="muted pad">Prohledávám Dokumenty, AppData a Proton prefixy…</p>`;
+      let res;
+      try {
+        res = await api("GET", `/api/recent?minutes=${m.querySelector("[data-minutes]").value}`);
+      } catch (e) {
+        out.innerHTML = `<p class="form-error">${esc(e.message)}</p>`;
+        return;
+      } finally {
+        btn.disabled = false;
+      }
+      results = res.folders;
+      const rows = results.map((f, i) => `
+        <div class="row-item">
+          <div class="recent-info"><code class="hint-path">${esc(recentPath(f))}</code>
+            <div class="muted">${files(f.files)} · ${esc(ago(f.modified))} · ${f.sample.map(esc).join(", ")}</div></div>
+          <button class="btn" type="button" data-use-recent="${i}">Použít</button>
+        </div>`).join("");
+      out.innerHTML = (rows || `<p class="muted pad">Nic se nezměnilo. Ulož ve hře pozici, nebo zkus delší čas.</p>`) +
+        (res.partial ? `<p class="muted pad">Hledání nestihlo projít všechno, výsledky můžou být neúplné.</p>` : "");
+    };
+    m.querySelector("[data-search]").addEventListener("click", search);
+    m.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-use-recent]");
+      if (!b) return;
+      const f = results[Number(b.dataset.useRecent)];
+      picked = { path: f.path, name: gameNameOf(f.path), label: f.label || "" };
+      closeModal(m);
+    });
+    search();
+  });
+}
+
+// gameNameOf guesses a game name from its save folder, skipping generic
+// folder names like Saves or a numeric user ID.
+function gameNameOf(path) {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  const generic = /^(saves?|save ?games?|saved ?games|saved|savedata|profiles?|data|users?|remote|storage|steam|local|\d+)$/i;
+  for (let i = parts.length - 1; i >= 0; i--) if (!generic.test(parts[i])) return parts[i];
+  return parts.pop() || path;
+}
+
+// recentPath names the game of a Proton prefix instead of its number.
+const recentPath = (f) => {
+  const p = shortPath(f.path);
+  return f.label ? p.replace(/^\[Proton \d+\]/, `[${f.label}]`) : p;
+};
 
 // ---------- folder picker ----------
 

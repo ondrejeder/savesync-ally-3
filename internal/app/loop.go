@@ -261,7 +261,7 @@ func (a *App) refresh(ctx context.Context) error {
 	// A layout change may come without any file change (e.g. only the
 	// filter changed); the sync is what pauses the game, so queue it.
 	for _, cg := range games {
-		if g, ok := a.store.Game(cg.ID); ok && cg.Layout != "" && cg.Layout != g.Layout {
+		if g, ok := a.store.Game(cg.ID); ok && cg.Layout != "" && layoutID(cg.Layout) != layoutID(g.Layout) {
 			a.enqueue(job{gameID: cg.ID})
 		}
 	}
@@ -307,14 +307,7 @@ func (a *App) syncGame(ctx context.Context, j job) {
 			"Hra se už nesynchronizuje. Lokální savy zůstaly na disku.")
 		return
 	}
-	if layout := a.cloudLayout(game.ID); layout != "" && layout != game.Layout {
-		by, _, _ := strings.Cut(layout, "|")
-		a.setStatus(game.ID, func(s *gameStatus) {
-			s.status, s.progress, s.conflict = web.StatusLayout, nil, nil
-			s.message = fmt.Sprintf("Na zařízení %s se změnila složka nebo filtr této hry. Zkontroluj složku i tady, synchronizace zatím čeká.", by)
-		})
-		a.alert("layout-"+layout, game.ID, game.Name+": zkontroluj složku",
-			"Na zařízení "+by+" se změnila složka hry. Synchronizace tady čeká, než ji zkontroluješ.")
+	if !a.checkLayout(&game) {
 		return
 	}
 	a.setStatus(game.ID, func(s *gameStatus) {
@@ -392,6 +385,7 @@ func (a *App) syncGame(ctx context.Context, j job) {
 			a.maybeVersion(ctx, game, next)
 		}
 		a.publishPath(ctx, game)
+		a.finishLayout(ctx, game.ID, device)
 		a.setStatus(game.ID, func(s *gameStatus) {
 			s.status, s.message, s.progress, s.conflict, s.guarded = web.StatusSynced, "", nil, nil, false
 			s.lastSync = time.Now()

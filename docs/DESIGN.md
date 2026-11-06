@@ -128,10 +128,15 @@ restartovat.
 - Totéž platí v „Upravit“: po změně složky nebo filtru na neprázdnou složku se volba vyžaduje.
   Dialog ukazuje stejnou nápovědu (cesty ostatních zařízení, kontrola složky).
 - Změna struktury: „Z tohoto zařízení“ po změně složky/filtru zapíše do herní složky na Drive
-  `appProperties.layout = "zařízení|čas"` ještě před nahráním. Ostatní zařízení, jejichž uložený
-  `Game.Layout` se liší, hru nesynchronizují (stav `layout`, notifikace), dokud složku neupraví
-  (uložení formuláře) nebo nepotvrdí „Pokračovat“ (akce `layout-ok`). Jinak by novou strukturu
-  zrcadlila do staré složky. Kontrola změn proto nejdřív obnoví seznam her a až pak řadí synchronizace.
+  `appProperties.layout = "zařízení|čas|p|i|d=rel|u=N"` ještě před nahráním (viz `app/layout.go`):
+  `p` = ještě se nahrává (ostatní čekají), `i` = změnil se filtr, `d`/`u` = nová složka je o 1–2
+  úrovně níž (relativní cesta) / výš. Po úspěšné synchronizaci se `p` odstraní.
+  Ostatní zařízení (uložený `Game.Layout` má jiné ID) posun převezmou sama: upraví složku (podsložku
+  případně vytvoří, nikdy nejdou výš než na kořen disku nebo domovskou složku), filtr převezmou
+  z cesty zařízení v cloudu, vynulují baseline a synchronizují běžně (nic se nemaže, rozdíly jsou
+  konflikty). Notifikace a upozornění na kartě. Jiné změny (sourozenecká složka, víc úrovní, obsazená
+  složka) hru pozastaví (stav `layout`), dokud ji uživatel neupraví nebo nepotvrdí „Pokračovat“
+  (akce `layout-ok`). Kontrola změn nejdřív obnoví seznam her a až pak řadí synchronizace.
 - Po přejmenování zařízení se jeho záznamy cest přepíšou pod nový název a starý se odstraní.
 
 ## Spojení s Drive
@@ -140,6 +145,16 @@ Vlastní transport: nečinná spojení se zahazují po 30 s (výchozích 90 s p�
 a další dotaz po minutě visel na mrtvém spojení), HTTP/2 ping po 15 s ticha, timeout hlaviček 45 s.
 Selhání na úrovni spojení se jednou hned zopakuje (ne u vytvoření souboru a ne u nepřehratelného
 těla). Jedna kontrola cloudu má strop 2 min.
+
+## Hledání složky se savy
+
+- Výběr složky v `compatdata` ukazuje u Proton prefixů název hry: Steam hry z `appmanifest_*.acf`,
+  non-Steam zkratky z `userdata/*/config/shortcuts.vdf` (binární VDF, `appid`, u starých zkratek
+  CRC32 z exe+název | 0x80000000). Ukládá se vždy skutečná cesta.
+- „Najít podle posledních změn“ (`GET /api/recent?minutes=`): projde místa z výběru složky (bez
+  domovské složky a celých disků, `compatdata` → `pfx/drive_c/users/steamuser` každého prefixu),
+  hloubka 8, limit 10 s. Přeskakuje cache/logy/temp, profily Chromium/Electron aplikací, Steam
+  config, už synchronizované hry a vlastní data. Vrací 10 složek s nejnověji změněnými soubory.
 
 ## Notifikace
 

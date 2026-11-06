@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 )
 
 // Backend is implemented by the app (and by the demo). Methods returning a
@@ -22,6 +23,23 @@ type Backend interface {
 	RestoreVersion(id, versionID string) (string, error)
 	SaveSettings(s Settings) (string, error)
 	Hint(id, root string) (Hint, error)
+	RecentFolders(minutes int) (RecentResult, error)
+}
+
+// RecentResult lists folders with recently changed files (newest first),
+// to find where a game just saved.
+type RecentResult struct {
+	Folders []RecentFolder `json:"folders"`
+	// Partial: the time budget ran out before every location was searched.
+	Partial bool `json:"partial,omitempty"`
+}
+
+type RecentFolder struct {
+	Path     string   `json:"path"`
+	Label    string   `json:"label,omitempty"` // game of the Proton prefix
+	Files    int      `json:"files"`
+	Modified string   `json:"modified"`
+	Sample   []string `json:"sample"`
 }
 
 // Hint helps set up a cloud game on a new device: how the other devices
@@ -111,6 +129,14 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.Handle("POST /api/games", s.auth(jsonHandler(func(req GameRequest, _ *http.Request) (any, error) {
 		return message(s.Backend.AddGame(req))
 	})))
+	mux.Handle("GET /api/recent", s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		minutes, _ := strconv.Atoi(r.URL.Query().Get("minutes"))
+		res, err := s.Backend.RecentFolders(minutes)
+		if res.Folders == nil {
+			res.Folders = []RecentFolder{}
+		}
+		reply(w, res, err)
+	})))
 	mux.Handle("GET /api/games/{id}/hint", s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hint, err := s.Backend.Hint(r.PathValue("id"), r.URL.Query().Get("root"))
 		if hint.Devices == nil {
@@ -194,3 +220,6 @@ func (Unimplemented) Versions(string) ([]Version, error)            { return nil
 func (Unimplemented) RestoreVersion(string, string) (string, error) { return "", ErrNotImplemented }
 func (Unimplemented) SaveSettings(Settings) (string, error)         { return "", ErrNotImplemented }
 func (Unimplemented) Hint(string, string) (Hint, error)             { return Hint{}, ErrNotImplemented }
+func (Unimplemented) RecentFolders(int) (RecentResult, error) {
+	return RecentResult{}, ErrNotImplemented
+}

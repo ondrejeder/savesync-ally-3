@@ -44,15 +44,8 @@ type GameFolder struct {
 	// description), so a new device can see how the others set it up.
 	Devices map[string]DevicePath
 	// Layout changes when a device moves the game to a different folder
-	// level and replaces the cloud ("device|RFC3339"); the other devices
-	// pause the game until their folder is checked.
+	// or filter and replaces the cloud; see app/layout.go.
 	Layout string
-}
-
-// LayoutDevice returns the device that changed the layout.
-func (g GameFolder) LayoutDevice() string {
-	d, _, _ := strings.Cut(g.Layout, "|")
-	return d
 }
 
 // DevicePath is one device's setup of a game.
@@ -162,12 +155,10 @@ func (c *Client) TouchGame(ctx context.Context, gameID, device string) error {
 	return c.patchJSON(ctx, apiBase+"/files/"+url.PathEscape(gameID), meta)
 }
 
-// SetLayout marks that device changed the game's folder structure and
-// returns the new marker.
-func (c *Client) SetLayout(ctx context.Context, gameID, device string) (string, error) {
-	layout := device + "|" + time.Now().UTC().Format(time.RFC3339Nano)
+// SetLayout stores the game's layout marker.
+func (c *Client) SetLayout(ctx context.Context, gameID, layout string) error {
 	meta := map[string]any{"appProperties": map[string]string{"layout": layout}}
-	return layout, c.patchJSON(ctx, apiBase+"/files/"+url.PathEscape(gameID), meta)
+	return c.patchJSON(ctx, apiBase+"/files/"+url.PathEscape(gameID), meta)
 }
 
 // SetDevicePath records this device's setup of a game. It re-reads the
