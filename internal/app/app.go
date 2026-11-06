@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -23,6 +24,8 @@ import (
 const (
 	// cloudInterval: how often the Drive change log is checked.
 	cloudInterval = time.Minute
+	// checkTimeout bounds one cloud check (listing games, change log, update).
+	checkTimeout = 2 * time.Minute
 	// guardWindow: local changes this soon after a download are confirmed
 	// by the user instead of being uploaded.
 	guardWindow = 10 * time.Minute
@@ -250,6 +253,17 @@ func (a *App) Action(kind, gameID string) (string, error) {
 	case "sync-all":
 		go a.fullCheck(context.Background())
 		return "Synchronizuji všechny hry…", nil
+	case "layout-ok":
+		game, ok := a.store.Game(gameID)
+		if !ok {
+			return "", errors.New("Hra nebyla nalezena.")
+		}
+		game.Layout = a.cloudLayout(gameID)
+		if err := a.store.PutGame(game); err != nil {
+			return "", err
+		}
+		a.enqueue(job{gameID: gameID})
+		return "Synchronizuji…", nil
 	case "keep-local", "keep-cloud":
 		side := engine.KeepLocal
 		if kind == "keep-cloud" {

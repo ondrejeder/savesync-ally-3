@@ -68,12 +68,15 @@ func (a *App) monitor(ctx context.Context) {
 		hadDriveErr := a.driveErr != ""
 		a.mu.Unlock()
 		full := lastFull.IsZero() || resumed || offline || hadDriveErr || now.Sub(lastFull) >= a.ScanInterval
+		// A check must never block the loop, whatever the network does.
+		checkCtx, cancel := context.WithTimeout(ctx, checkTimeout)
 		var err error
 		if full {
-			err = a.fullCheck(ctx)
+			err = a.fullCheck(checkCtx)
 		} else {
-			err = a.checkChanges(ctx)
+			err = a.checkChanges(checkCtx)
 		}
+		cancel()
 		switch {
 		case errors.Is(err, drive.ErrReauth), errors.Is(err, drive.ErrNotConnected):
 			// Waiting for the user; the auth callback triggers a full check.
@@ -168,6 +171,7 @@ func (a *App) checkChanges(ctx context.Context) error {
 	}
 	refresh := false
 	queued := map[string]bool{}
+	var jobs []string
 	for _, ch := range changes {
 		switch {
 		case ch.Kind == "game" || ch.Kind == "root":
@@ -180,15 +184,20 @@ func (a *App) checkChanges(ctx context.Context) error {
 			for _, parent := range ch.Parents {
 				if local[parent] && !queued[parent] {
 					queued[parent] = true
-					a.enqueue(job{gameID: parent})
+					jobs = append(jobs, parent)
 				}
 			}
 		}
 	}
+	// Refresh first: a sync must see a layout change made together with
+	// the uploads.
 	if refresh {
 		if err := a.refresh(ctx); err != nil {
 			return err
 		}
+	}
+	for _, id := range jobs {
+		a.enqueue(job{gameID: id})
 	}
 	if next != token {
 		_ = a.store.SaveChangesToken(next)
@@ -249,6 +258,13 @@ func (a *App) refresh(ctx context.Context) error {
 	a.rootID, a.cloudGames = rootID, games
 	a.mu.Unlock()
 	a.notifyUI()
+	// A layout change may come without any file change (e.g. only the
+	// filter changed); the sync is what pauses the game, so queue it.
+	for _, cg := range games {
+		if g, ok := a.store.Game(cg.ID); ok && cg.Layout != "" && cg.Layout != g.Layout {
+			a.enqueue(job{gameID: cg.ID})
+		}
+	}
 	return nil
 }
 
@@ -289,6 +305,16 @@ func (a *App) syncGame(ctx context.Context, j job) {
 		})
 		a.alert("removed", game.ID, game.Name+": smazáno z cloudu",
 			"Hra se už nesynchronizuje. Lokální savy zůstaly na disku.")
+		return
+	}
+	if layout := a.cloudLayout(game.ID); layout != "" && layout != game.Layout {
+		by, _, _ := strings.Cut(layout, "|")
+		a.setStatus(game.ID, func(s *gameStatus) {
+			s.status, s.progress, s.conflict = web.StatusLayout, nil, nil
+			s.message = fmt.Sprintf("Na zařízení %s se změnila složka nebo filtr této hry. Zkontroluj složku i tady, synchronizace zatím čeká.", by)
+		})
+		a.alert("layout-"+layout, game.ID, game.Name+": zkontroluj složku",
+			"Na zařízení "+by+" se změnila složka hry. Synchronizace tady čeká, než ji zkontroluješ.")
 		return
 	}
 	a.setStatus(game.ID, func(s *gameStatus) {

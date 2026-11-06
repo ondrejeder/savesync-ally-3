@@ -40,6 +40,9 @@ const (
 	StatusMissing   = "missing"
 	StatusError     = "error"
 	StatusPending   = "pending"
+	// StatusLayout: another device moved the game to a different folder
+	// level; syncing waits until this device's folder is checked.
+	StatusLayout = "layout"
 )
 
 type Game struct {

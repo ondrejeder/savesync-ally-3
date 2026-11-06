@@ -39,7 +39,8 @@ type hintFiles struct {
 
 // publishPath records where this device keeps the game, so other devices
 // can show it when the game is set up there. Errors are only logged.
-func (a *App) publishPath(ctx context.Context, game store.Game) {
+// drop removes entries of former device names.
+func (a *App) publishPath(ctx context.Context, game store.Game, drop ...string) {
 	device := a.store.Config().Device
 	want := drive.DevicePath{Root: displayRoot(game.Root), Include: game.Include, OS: runtime.GOOS}
 	a.mu.Lock()
@@ -48,6 +49,11 @@ func (a *App) publishPath(ctx context.Context, game store.Game) {
 		if cg.ID == game.ID {
 			cur, ok := cg.Devices[device]
 			known = ok && cur.Root == want.Root && cur.OS == want.OS && slices.Equal(cur.Include, want.Include)
+			for _, d := range drop {
+				if _, stale := cg.Devices[d]; stale {
+					known = false
+				}
+			}
 		}
 	}
 	a.mu.Unlock()
@@ -55,7 +61,7 @@ func (a *App) publishPath(ctx context.Context, game store.Game) {
 		return
 	}
 	want.Updated = time.Now().UTC()
-	devices, err := a.cloud.SetDevicePath(ctx, game.ID, device, want)
+	devices, err := a.cloud.SetDevicePath(ctx, game.ID, device, want, drop...)
 	if err != nil {
 		a.Log.Printf("publish path %s: %v", game.Name, err)
 		return
@@ -67,6 +73,30 @@ func (a *App) publishPath(ctx context.Context, game store.Game) {
 		}
 	}
 	a.mu.Unlock()
+}
+
+// renameDevice moves this device's published paths to its new name.
+func (a *App) renameDevice(old string) {
+	if !a.connected() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	for _, g := range a.store.Config().Games {
+		a.publishPath(ctx, g, old)
+	}
+}
+
+// cloudLayout returns the cloud layout marker of a game.
+func (a *App) cloudLayout(id string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, cg := range a.cloudGames {
+		if cg.ID == id {
+			return cg.Layout
+		}
+	}
+	return ""
 }
 
 // Hint describes how the other devices set up a cloud game and, when root

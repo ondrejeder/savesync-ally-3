@@ -247,7 +247,8 @@ func (a *App) SetupGame(id string, req web.GameRequest) (string, error) {
 	default:
 		return "", errors.New("Neplatná volba verze.")
 	}
-	if err := a.store.PutGame(store.Game{ID: id, Name: name, Root: req.Root, Include: req.Include}); err != nil {
+	game := store.Game{ID: id, Name: name, Root: req.Root, Include: req.Include, Layout: a.cloudLayout(id)}
+	if err := a.store.PutGame(game); err != nil {
 		return "", err
 	}
 	a.updateWatcher()
@@ -274,6 +275,24 @@ func (a *App) EditGame(id string, req web.GameRequest) (string, error) {
 	if err := a.checkRootFree(req.Root, id); err != nil {
 		return "", err
 	}
+	changed := !platform.SamePath(req.Root, game.Root) || strings.Join(req.Include, "\n") != strings.Join(game.Include, "\n")
+	var keep engine.Side
+	switch req.Keep {
+	case "local":
+		keep = engine.KeepLocal
+	case "cloud":
+		keep = engine.KeepCloud
+	case "":
+		// Same rule as on setup: a different folder with files is never
+		// merged with the cloud file by file.
+		if changed && hasEntries(req.Root) {
+			if rels, err := a.cloudRels(id); err == nil && len(rels) > 0 {
+				return "", errors.New("Ve složce už jsou soubory. Vyber, kterou verzi použít.")
+			}
+		}
+	default:
+		return "", errors.New("Neplatná volba verze.")
+	}
 	if req.Name != game.Name {
 		if err := a.requireDrive(); err != nil {
 			return "", err
@@ -293,17 +312,46 @@ func (a *App) EditGame(id string, req web.GameRequest) (string, error) {
 	}
 	// A different folder or filter means the old baseline no longer describes
 	// this folder; start fresh so differences become a question, not a deletion.
-	if !platform.SamePath(req.Root, game.Root) || strings.Join(req.Include, "\n") != strings.Join(game.Include, "\n") {
+	if changed {
 		if err := a.store.ResetBaseline(id); err != nil {
 			return "", err
 		}
 	}
-	game.Name, game.Root, game.Include = req.Name, req.Root, req.Include
+	// Saving the form also confirms the folder after a layout change
+	// elsewhere. Replacing the cloud with a differently structured folder
+	// is such a change: the other devices pause the game until they check
+	// their folder, instead of mirroring the new structure into the old one.
+	layout := a.cloudLayout(id)
+	if changed && keep == engine.KeepLocal {
+		if err := a.requireDrive(); err != nil {
+			return "", err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		var err error
+		if layout, err = a.cloud.SetLayout(ctx, id, a.store.Config().Device); err != nil {
+			return "", err
+		}
+		a.mu.Lock()
+		for i := range a.cloudGames {
+			if a.cloudGames[i].ID == id {
+				a.cloudGames[i].Layout = layout
+			}
+		}
+		a.mu.Unlock()
+	}
+	game.Name, game.Root, game.Include, game.Layout = req.Name, req.Root, req.Include, layout
 	if err := a.store.PutGame(game); err != nil {
 		return "", err
 	}
 	a.updateWatcher()
-	a.enqueue(job{gameID: id})
+	a.enqueue(job{gameID: id, keep: keep})
+	switch keep {
+	case engine.KeepLocal:
+		return "Uloženo, nahrávám obsah složky do cloudu…", nil
+	case engine.KeepCloud:
+		return "Uloženo, zálohuji složku a stahuji verzi z cloudu…", nil
+	}
 	return "Uloženo.", nil
 }
 
@@ -396,8 +444,12 @@ func (a *App) SaveSettings(s web.Settings) (string, error) {
 	if s.Versions < 1 || s.Versions > 5 {
 		return "", errors.New("Počet verzí musí být 1 až 5.")
 	}
+	old := a.store.Config().Device
 	if err := a.store.SetDevice(device); err != nil {
 		return "", err
+	}
+	if old != device {
+		go a.renameDevice(old)
 	}
 	if err := a.store.SetVersions(s.Versions); err != nil {
 		return "", err

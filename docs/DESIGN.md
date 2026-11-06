@@ -125,6 +125,21 @@ restartovat.
   soubory se před přepsáním nebo smazáním zazálohují. Server volbu vyžaduje i bez UI.
 - Stejné vynucení je v menu hry: „Nahrát stav tohoto zařízení do cloudu“ / „Přepsat toto zařízení
   stavem z cloudu“ (akce `keep-local` / `keep-cloud`, s potvrzením).
+- Totéž platí v „Upravit“: po změně složky nebo filtru na neprázdnou složku se volba vyžaduje.
+  Dialog ukazuje stejnou nápovědu (cesty ostatních zařízení, kontrola složky).
+- Změna struktury: „Z tohoto zařízení“ po změně složky/filtru zapíše do herní složky na Drive
+  `appProperties.layout = "zařízení|čas"` ještě před nahráním. Ostatní zařízení, jejichž uložený
+  `Game.Layout` se liší, hru nesynchronizují (stav `layout`, notifikace), dokud složku neupraví
+  (uložení formuláře) nebo nepotvrdí „Pokračovat“ (akce `layout-ok`). Jinak by novou strukturu
+  zrcadlila do staré složky. Kontrola změn proto nejdřív obnoví seznam her a až pak řadí synchronizace.
+- Po přejmenování zařízení se jeho záznamy cest přepíšou pod nový název a starý se odstraní.
+
+## Spojení s Drive
+
+Vlastní transport: nečinná spojení se zahazují po 30 s (výchozích 90 s přežívalo mapování v routeru
+a další dotaz po minutě visel na mrtvém spojení), HTTP/2 ping po 15 s ticha, timeout hlaviček 45 s.
+Selhání na úrovni spojení se jednou hned zopakuje (ne u vytvoření souboru a ne u nepřehratelného
+těla). Jedna kontrola cloudu má strop 2 min.
 
 ## Notifikace
 

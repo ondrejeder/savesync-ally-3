@@ -19,6 +19,9 @@ type Game struct {
 	Name    string   `json:"name"`
 	Root    string   `json:"root"`
 	Include []string `json:"include,omitempty"`
+	// Layout is the cloud layout marker this device has accepted
+	// (drive.GameFolder.Layout).
+	Layout string `json:"layout,omitempty"`
 }
 
 type Config struct {

@@ -43,6 +43,16 @@ type GameFolder struct {
 	// Devices: where each device keeps this game's saves (from the folder
 	// description), so a new device can see how the others set it up.
 	Devices map[string]DevicePath
+	// Layout changes when a device moves the game to a different folder
+	// level and replaces the cloud ("device|RFC3339"); the other devices
+	// pause the game until their folder is checked.
+	Layout string
+}
+
+// LayoutDevice returns the device that changed the layout.
+func (g GameFolder) LayoutDevice() string {
+	d, _, _ := strings.Cut(g.Layout, "|")
+	return d
 }
 
 // DevicePath is one device's setup of a game.
@@ -152,10 +162,19 @@ func (c *Client) TouchGame(ctx context.Context, gameID, device string) error {
 	return c.patchJSON(ctx, apiBase+"/files/"+url.PathEscape(gameID), meta)
 }
 
+// SetLayout marks that device changed the game's folder structure and
+// returns the new marker.
+func (c *Client) SetLayout(ctx context.Context, gameID, device string) (string, error) {
+	layout := device + "|" + time.Now().UTC().Format(time.RFC3339Nano)
+	meta := map[string]any{"appProperties": map[string]string{"layout": layout}}
+	return layout, c.patchJSON(ctx, apiBase+"/files/"+url.PathEscape(gameID), meta)
+}
+
 // SetDevicePath records this device's setup of a game. It re-reads the
 // description first so entries written by other devices are kept, and
-// returns the merged map.
-func (c *Client) SetDevicePath(ctx context.Context, gameID, device string, p DevicePath) (map[string]DevicePath, error) {
+// returns the merged map. Entries named in drop are removed (a renamed
+// device).
+func (c *Client) SetDevicePath(ctx context.Context, gameID, device string, p DevicePath, drop ...string) (map[string]DevicePath, error) {
 	var f file
 	if err := c.getJSON(ctx, apiBase+"/files/"+url.PathEscape(gameID)+"?fields=description", &f); err != nil {
 		return nil, err
@@ -163,6 +182,9 @@ func (c *Client) SetDevicePath(ctx context.Context, gameID, device string, p Dev
 	devices := parseGameMeta(f.Description)
 	if devices == nil {
 		devices = map[string]DevicePath{}
+	}
+	for _, d := range drop {
+		delete(devices, d)
 	}
 	devices[device] = p
 	desc, err := json.Marshal(gameMeta{Devices: devices})
@@ -390,6 +412,16 @@ func (c *Client) do(req *http.Request) (*http.Response, error) {
 			if errors.Is(err, ErrReauth) {
 				return nil, ErrReauth
 			}
+			// A dead connection: drop the pool and try once more at once.
+			if attempt == 0 && retryNetwork(req, err) {
+				transport.CloseIdleConnections()
+				if req.GetBody != nil {
+					if req.Body, err = req.GetBody(); err != nil {
+						return nil, err
+					}
+				}
+				continue
+			}
 			return nil, err
 		}
 		if resp.StatusCode < 300 {
@@ -442,7 +474,7 @@ func readError(resp *http.Response) *APIError {
 }
 
 func gameFromFile(f file) GameFolder {
-	g := GameFolder{ID: f.ID, Name: f.Name, UpdatedBy: f.AppProperties["updatedBy"], Devices: parseGameMeta(f.Description)}
+	g := GameFolder{ID: f.ID, Name: f.Name, UpdatedBy: f.AppProperties["updatedBy"], Devices: parseGameMeta(f.Description), Layout: f.AppProperties["layout"]}
 	if t, err := time.Parse(time.RFC3339, f.AppProperties["updatedAt"]); err == nil {
 		g.UpdatedAt = t
 	} else if t, err := time.Parse(time.RFC3339, f.ModifiedTime); err == nil {

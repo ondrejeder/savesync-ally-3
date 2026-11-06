@@ -136,7 +136,7 @@ func (a *Auth) HTTPClient(ctx context.Context) (*http.Client, error) {
 	if ts == nil {
 		return nil, ErrNotConnected
 	}
-	return oauth2.NewClient(ctx, persistingSource{a: a, base: ts}), nil
+	return oauth2.NewClient(withTransport(ctx), persistingSource{a: a, base: ts}), nil
 }
 
 // MarkExpired is called when Drive rejects the token.
@@ -255,7 +255,7 @@ func (a *Auth) useToken(tok *oauth2.Token) {
 }
 
 func (a *Auth) useTokenLocked(tok *oauth2.Token) {
-	a.ts = oauth2.ReuseTokenSource(tok, a.cfg.TokenSource(context.Background(), tok))
+	a.ts = oauth2.ReuseTokenSource(tok, a.cfg.TokenSource(withTransport(context.Background()), tok))
 	a.saved = tok.AccessToken
 }
 

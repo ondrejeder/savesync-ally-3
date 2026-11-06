@@ -119,6 +119,9 @@ function card(g) {
       const meta = `Jen v cloudu${g.cloudDevice ? ` · naposledy z ${esc(g.cloudDevice)}` : ""}${g.cloudModified ? ` ${esc(when(g.cloudModified))}` : ""}`;
       return `<section class="card cloud">${head("b-cloud", "cloud", meta)}<div class="actions">${btn("setup", "Nastavit na tomto zařízení", "primary")}${more}</div></section>`;
     }
+    case "layout":
+      return `<section class="card conflict">${head("b-warn", "folder", esc(g.message), "warn")}<div class="actions">${btn("edit", "Zkontrolovat složku", "primary")}${more}</div>
+        <div class="card-notice">${icon("alert")}<span class="grow">Je složka i tady správně (měnil se třeba jen filtr)?</span><button class="btn small" data-act="layout-ok" data-id="${esc(g.id)}">Pokračovat</button></div></section>`;
     case "missing":
       return `<section class="card">${head("b-bad", "folder-off", esc(g.message || "Složka nenalezena"), "bad")}<div class="actions">${btn("edit", "Upravit cestu")}${more}</div></section>`;
     case "error":
@@ -262,13 +265,13 @@ function gameForm({ mode, game }) {
   const intro = {
     add: "Vyber složku, kde hra ukládá pozice. Celá složka se bude synchronizovat přes Google Drive.",
     setup: "Vyber složku, kde tahle hra ukládá pozice na tomto zařízení. Prázdná složka se naplní z cloudu; když v ní už nějaké soubory jsou, vybereš, kterou verzi použít.",
-    edit: "Po změně složky nebo filtru se při další synchronizaci obě strany znovu porovnají.",
+    edit: "Když složku nebo filtr změníš a v nové složce už jsou soubory, vybereš, kterou verzi použít.",
   };
   const m = openModal({
     title: titles[mode],
     body: `
       <p class="lead">${intro[mode]}</p>
-      ${mode === "setup" ? `<div class="hint" data-hint hidden></div>` : ""}
+      ${mode !== "add" ? `<div class="hint" data-hint hidden></div>` : ""}
       ${mode !== "setup" ? `<label class="field"><span>Název hry</span><input name="name" value="${esc(game?.name || "")}" placeholder="Hollow Knight" autocomplete="off"></label>` : ""}
       <div class="field"><span>Složka se savy</span>
         <div class="path-row">
@@ -277,9 +280,11 @@ function gameForm({ mode, game }) {
         </div>
         <div data-check></div>
       </div>
-      ${mode === "setup" ? `<div class="field keep" data-keep hidden><span>Ve složce už jsou soubory. Kterou verzi použít?</span>
+      ${mode !== "add" ? `<div class="field keep" data-keep hidden><span>Ve složce už jsou soubory. Kterou verzi použít?</span>
         <label class="choice"><input type="radio" name="keep" value="cloud"><span><strong>Z cloudu</strong><small>Obsah složky se zazálohuje a nahradí přesnou kopií cloudu.</small></span></label>
-        <label class="choice"><input type="radio" name="keep" value="local"><span><strong>Z tohoto zařízení</strong><small>Cloud se nahradí obsahem této složky. Ostatní zařízení si ho stáhnou (své soubory si předtím zazálohují).</small></span></label>
+        <label class="choice"><input type="radio" name="keep" value="local"><span><strong>Z tohoto zařízení</strong><small>${mode === "edit"
+          ? "Cloud se nahradí obsahem této složky. Ostatní zařízení tuhle hru pozastaví, dokud u nich složku nezkontroluješ."
+          : "Cloud se nahradí obsahem této složky. Ostatní zařízení si ho stáhnou (své soubory si předtím zazálohují)."}</small></span></label>
       </div>` : ""}
       <label class="field"><span>Filtr souborů <em>(nepovinné)</em></span>
         <input name="include" value="${esc((game?.include || []).join("; "))}" placeholder="*.sav; profile*.dat" autocomplete="off">
@@ -293,8 +298,20 @@ function gameForm({ mode, game }) {
   // Setup on a new device: show how the other devices have this game set up
   // and check that the chosen folder contains the cloud files.
   let hintSeq = 0;
+  let lastHint = null;
+  const includeList = (v) => v.split(/[;,]/).map((s) => s.trim()).filter(Boolean).join(";");
+  // Edit: the version choice only matters once the folder or filter changes.
+  const changed = () => mode !== "edit" || root !== game.root || includeList(includeEl.value) !== (game.include || []).join(";");
+  const updateKeep = () => {
+    const keepEl = m.querySelector("[data-keep]");
+    if (!keepEl) return;
+    const h = lastHint;
+    const show = !!(h && h.files && h.check && h.check.status !== "empty" && changed());
+    if (!show) keepEl.querySelectorAll("input").forEach((i) => (i.checked = false));
+    keepEl.hidden = !show;
+  };
   const loadHint = async () => {
-    if (mode !== "setup") return;
+    if (mode === "add") return;
     const seq = ++hintSeq;
     const query = root ? `?root=${encodeURIComponent(root)}` : "";
     let h;
@@ -310,11 +327,11 @@ function gameForm({ mode, game }) {
     const checkEl = m.querySelector("[data-check]");
     checkEl.innerHTML = h.files ? checkLine(h.check, root) : "";
     // Files on both sides: the user picks which version wins (never merged).
-    const keepEl = m.querySelector("[data-keep]");
-    keepEl.hidden = !(h.files && h.check && h.check.status !== "empty");
+    lastHint = h;
+    updateKeep();
     if (h.check && h.check.status !== "ok") checkEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
     const prev = h.devices.find((d) => d.include?.length);
-    if (prev && !includeEl.value.trim() && !includeEl.dataset.touched) includeEl.value = prev.include.join("; ");
+    if (mode === "setup" && prev && !includeEl.value.trim() && !includeEl.dataset.touched) includeEl.value = prev.include.join("; ");
   };
   const setRoot = (path, label = "") => {
     root = path;
@@ -323,14 +340,14 @@ function gameForm({ mode, game }) {
     const name = m.querySelector('input[name="name"]');
     if (name && !name.value.trim() && label) name.value = label;
     m.querySelector("[data-check]").innerHTML = "";
-    const keepEl = m.querySelector("[data-keep]");
-    if (keepEl) {
-      keepEl.hidden = true;
-      keepEl.querySelectorAll("input").forEach((i) => (i.checked = false));
-    }
+    lastHint = null;
+    updateKeep();
     loadHint();
   };
-  includeEl.addEventListener("input", () => (includeEl.dataset.touched = "1"));
+  includeEl.addEventListener("input", () => {
+    includeEl.dataset.touched = "1";
+    updateKeep();
+  });
   m.querySelector("[data-keep]")?.addEventListener("change", () => setError(m, ""));
   m.addEventListener("click", (e) => {
     const use = e.target.closest("[data-use]");
@@ -685,6 +702,15 @@ async function handle(kind, id) {
         confirm: "Přepsat z cloudu",
       });
       if (ok) action("keep-cloud", id);
+      return;
+    }
+    case "layout-ok": {
+      const ok = await confirmModal({
+        title: "Pokračovat se stejnou složkou?",
+        text: `${esc(g?.name)} se bude dál synchronizovat do <code>${esc(g?.root)}</code>. Soubory, které jiné zařízení z cloudu odebralo, se tu po uložení do zálohy smažou.`,
+        confirm: "Pokračovat",
+      });
+      if (ok) action("layout-ok", id);
       return;
     }
     case "delete-cloud": {

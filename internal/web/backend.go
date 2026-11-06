@@ -65,8 +65,9 @@ type GameRequest struct {
 	Name    string   `json:"name"`
 	Root    string   `json:"root"`
 	Include []string `json:"include"`
-	// Keep (setup only): which side wins when the folder already has files,
-	// "local" or "cloud". Required then, so saves are never merged by accident.
+	// Keep: which side wins when the (new) folder already has files, "local"
+	// or "cloud". Required on setup and on a folder or filter change, so
+	// saves are never merged by accident.
 	Keep string `json:"keep,omitempty"`
 }
 
